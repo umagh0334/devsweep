@@ -37,10 +37,10 @@ struct CacheCategory: Identifiable, Decodable {
     var iconName: String {
         switch name {
         case "gradle", "cargo", "maven", "go": return "box"
-        case "npm", "yarn", "pnpm", "bun", "pip", "cocoapods", "swiftpm", "composer", "nuget", "deno", "pub": return "package"
+        case "npm", "yarn", "pnpm", "bun", "pip", "uv", "cocoapods", "swiftpm", "composer", "nuget", "deno", "pub": return "package"
         case "brew":                          return "brew"
         case "docker", "colima":              return "server"
-        case "xcode", "xcode-sim":            return "code"
+        case "xcode", "xcode-sim", "vscode", "cursor", "jetbrains", "androidstudio", "zed", "codemate", "codex": return "code"
         case "playwright":                    return "globe"
         case "huggingface":                   return "database"
         case "rustup-targets":                return "settings"

@@ -25,12 +25,12 @@ set -euo pipefail
 #    SAFE_CATS  : `clean`/`clean all`에 포함되는 기본 안전 카테고리
 #    HEAVY_CATS : 재설치/재다운로드 비용이 큰 것 — 이름을 직접 지정해야만 정리
 # ─────────────────────────────────────────────────────────────
-SAFE_CATS=(gradle npm yarn pnpm bun pip cargo go maven cocoapods swiftpm composer nuget deno pub brew docker colima xcode)
-HEAVY_CATS=(playwright rustup-targets xcode-sim huggingface)
+SAFE_CATS=(gradle npm yarn pnpm bun pip uv cargo go maven cocoapods swiftpm composer nuget deno pub brew docker colima xcode vscode cursor zed codemate)
+HEAVY_CATS=(playwright rustup-targets xcode-sim huggingface jetbrains androidstudio codex)
 # 네이티브 cleanup 명령(또는 prune)으로 정리되는 카테고리 — 나이 필터(--older-than) 미적용
-NATIVE_CATS=(npm yarn pnpm pip brew docker rustup-targets go nuget xcode-sim)
+NATIVE_CATS=(npm yarn pnpm pip uv brew docker rustup-targets go nuget xcode-sim)
 # 경로가 없어(VM/메타데이터) 나이 필터(--older-than) 측정·정리가 불가능한 카테고리
-NO_AGE_CATS=(docker rustup-targets xcode-sim)
+NO_AGE_CATS=(docker rustup-targets xcode-sim codex)
 
 # ─────────────────────────────────────────────────────────────
 #  보호 목록 (protect list)
@@ -156,6 +156,37 @@ do_pub()       { handle_paths "$1" "pub" "재다운로드" -- "$HOME/.pub-cache"
 # colima: Library/Caches/colima(다운로드 캐시)만. ~/.colima/_disks(컨테이너 데이터)는 절대 제외.
 do_colima()    { handle_paths "$1" "colima" "재다운로드" -- "$HOME/Library/Caches/colima"; }
 do_huggingface() { handle_paths "$1" "huggingface" "재다운로드(무거움)" -- "$HOME/.cache/huggingface"; }
+
+# ── IDE 캐시 (인덱스/코드 캐시만 — 설정·확장·워크스페이스 상태는 건드리지 않음) ──
+do_jetbrains()     { handle_paths "$1" "jetbrains" "재생성" -- "$HOME/Library/Caches/JetBrains"; }
+do_androidstudio() { handle_paths "$1" "androidstudio" "재생성" -- $HOME/Library/Caches/Google/AndroidStudio* "$HOME/.android/cache"; }
+do_zed()           { handle_paths "$1" "zed" "재생성" -- "$HOME/Library/Caches/dev.zed.Zed"; }
+do_vscode() { handle_paths "$1" "vscode" "재생성" -- \
+  "$HOME/Library/Application Support/Code/Cache" "$HOME/Library/Application Support/Code/CachedData" \
+  "$HOME/Library/Application Support/Code/Code Cache" "$HOME/Library/Application Support/Code/GPUCache"; }
+do_cursor() { handle_paths "$1" "cursor" "재생성" -- \
+  "$HOME/Library/Application Support/Cursor/Cache" "$HOME/Library/Application Support/Cursor/CachedData" \
+  "$HOME/Library/Application Support/Cursor/Code Cache" "$HOME/Library/Application Support/Cursor/GPUCache"; }
+# CodeMate(자체 IDE): 로그/캐시만 — 설치 본체(lib·bin)·DB·인증·설정은 절대 건드리지 않음
+do_codemate() { handle_paths "$1" "codemate" "재생성" -- \
+  "$HOME/.codemate/userdata/logs" "$HOME/.codemate/caches" "$HOME/.codemate/daemon.log"; }
+
+# uv(Python, Astral): 네이티브 cache clean 우선. ~/.local/share/uv(설치된 파이썬·툴)은 제외
+do_uv() {
+  local p1="$HOME/.cache/uv" p2="$HOME/Library/Caches/uv"
+  case "$1" in
+    size) paths_size_kb "$p1" "$p2" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "uv" "$(human "$(paths_size_kb "$p1" "$p2")")" "재다운로드" ;;
+    json) emit_json uv "$(paths_size_kb "$p1" "$p2")" "재다운로드" ;;
+    paths) printf '%s\n%s\n' "$p1" "$p2" ;;
+    clean)
+      if command -v uv >/dev/null 2>&1; then uv cache clean >/dev/null 2>&1 || { wipe "$p1"; wipe "$p2"; }
+      else wipe "$p1"; wipe "$p2"; fi ;;
+  esac
+}
+
+# codex 런타임 캐시(재다운로드 큼) — ~/.codex(세션·설정)은 절대 건드리지 않음
+do_codex() { handle_paths "$1" "codex" "재다운로드(무거움)" -- "$HOME/.cache/codex-runtimes"; }
 
 # go: 네이티브 go clean 우선 (modcache는 읽기전용이라 rm 전 chmod 필요)
 do_go() {
@@ -456,6 +487,39 @@ cmd_detail() {
       kind="재다운로드(무거움)"; regen_cost="high"
       regen_note="HuggingFace 모델/데이터셋(수 GB)을 다시 받아야 함."
       command="rm -rf ~/.cache/huggingface" ;;
+    vscode)
+      kind="재생성"; regen_cost="low"
+      regen_note="VS Code가 다음 실행 때 캐시/코드 인덱스를 재생성함. 설정·확장은 건드리지 않음."
+      command="rm -rf ~/Library/Application\ Support/Code/{Cache,CachedData,Code\ Cache,GPUCache}" ;;
+    cursor)
+      kind="재생성"; regen_cost="low"
+      regen_note="Cursor가 다음 실행 때 캐시/코드 인덱스를 재생성함. 설정·확장은 건드리지 않음."
+      command="rm -rf ~/Library/Application\ Support/Cursor/{Cache,CachedData,Code\ Cache,GPUCache}" ;;
+    jetbrains)
+      kind="재생성"; regen_cost="med"
+      regen_note="JetBrains IDE가 다음 실행 때 프로젝트를 다시 인덱싱함(대형 프로젝트는 수 분 소요). 설정은 보존."
+      command="rm -rf ~/Library/Caches/JetBrains" ;;
+    androidstudio)
+      kind="재생성"; regen_cost="med"
+      regen_note="Android Studio가 다시 인덱싱하고 SDK 캐시를 다시 받음."
+      command="rm -rf ~/Library/Caches/Google/AndroidStudio* ~/.android/cache" ;;
+    zed)
+      kind="재생성"; regen_cost="low"
+      regen_note="Zed가 다음 실행 때 캐시를 재생성함."
+      command="rm -rf ~/Library/Caches/dev.zed.Zed" ;;
+    codemate)
+      kind="재생성"; regen_cost="low"
+      regen_note="CodeMate가 다음 실행 때 로그/캐시를 다시 생성함. 설치 본체(lib·bin)·DB(local.db)·인증·설정은 건드리지 않음."
+      command="rm -rf ~/.codemate/userdata/logs ~/.codemate/caches ~/.codemate/daemon.log" ;;
+    uv)
+      regen_note="uv가 PyPI에서 휠/소스를 다시 받음. 설치된 파이썬·툴(~/.local/share/uv)은 보존."
+      fallback="rm -rf ~/.cache/uv ~/Library/Caches/uv"
+      if command -v uv >/dev/null 2>&1; then method="native"; command="uv cache clean"
+      else method="rm"; command="rm -rf ~/.cache/uv ~/Library/Caches/uv"; native_avail="false"; fi ;;
+    codex)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="Codex CLI가 런타임(약 1GB+)을 다시 받아야 함. ~/.codex 의 세션·설정은 건드리지 않음."
+      command="rm -rf ~/.cache/codex-runtimes" ;;
   esac
 
   # ── 안전성 (SAFE/HEAVY 소속 기반) ──
@@ -567,6 +631,18 @@ cmd_clean() {
   fi
 }
 
+# 자동 정리가 비울 추정 용량(KB)만 출력 — clean(인자 없음)과 동일 타겟(SAFE·보호제외·나이반영).
+# 기계가독 숫자만. headless 래퍼가 before/after 로 실제 회수량 산출하는 데 사용(python3 등 외부 의존 0).
+cmd_total() {
+  local t total=0 kb
+  for t in "${SAFE_CATS[@]}"; do
+    is_protected "$t" && continue
+    if [ -n "$AGE_DAYS" ] && is_in "$t" "${NO_AGE_CATS[@]}"; then continue; fi
+    kb=$("do_$t" size 2>/dev/null); total=$((total + ${kb:-0}))
+  done
+  echo "$total"
+}
+
 # ── 엔트리포인트 ─────────────────────────────────────────────
 # 전역 옵션: --older-than=Nd|Nw|N (모든 명령 공통 — scan/json/detail/clean 의 측정·정리에 적용)
 AGE_DAYS=""
@@ -592,6 +668,7 @@ case "${1:-scan}" in
   --json|json) cmd_json ;;
   detail)      shift; cmd_detail "${1:-}" ;;
   clean|c)     shift; cmd_clean "$@" ;;
+  total)       cmd_total ;;
   -h|--help|help) awk 'NR>=2 && /^set /{exit} NR>=2{sub(/^# ?/,""); print}' "$0" ;;
   *) echo "알 수 없는 명령: $1  ('devsweep --help' 참고)" >&2; exit 1 ;;
 esac

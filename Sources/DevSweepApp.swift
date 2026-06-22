@@ -4,8 +4,12 @@ import SwiftUI
 struct DevSweepApp: App {
     /// 메인 창과 환경설정 창이 같은 Engine 을 공유 (보호 토글 → 메인 즉시 반영)
     @State private var engine = Engine()
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearance = 0   // 0=시스템 1=라이트 2=다크
     @AppStorage("language") private var languageRaw = ""   // 빈값이면 시스템 언어 추정
+    @AppStorage("autoClean") private var autoClean = false
+    @AppStorage("autoCleanPeriod") private var autoCleanPeriod = 0   // 0=매일 1=매주 2=매월
+    @AppStorage("olderThanDays") private var olderThanDays = 0
 
     private var scheme: ColorScheme? {
         switch appearance { case 1: return .light; case 2: return .dark; default: return nil }
@@ -17,6 +21,17 @@ struct DevSweepApp: App {
             ContentView(engine: engine)
                 .preferredColorScheme(scheme)
                 .environment(\.appLanguage, lang)
+                .task {
+                    // 콜드 런치 시 1회(.onChange 는 초기값엔 미발동) — 자동 정리 결과 합산 + 상태 self-heal
+                    AutoClean.reconcile()
+                    AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, olderThanDays: olderThanDays)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // 다시 포그라운드 진입 시 재합산(단일 writer)
+                    guard phase == .active else { return }
+                    AutoClean.reconcile()
+                    AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, olderThanDays: olderThanDays)
+                }
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)

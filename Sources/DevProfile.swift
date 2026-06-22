@@ -13,7 +13,7 @@ enum DevProfile {
     /// 생태계 → 카테고리 매핑
     private static let ecosystems: [(key: String, cats: Set<String>)] = [
         ("node",      ["npm", "yarn", "pnpm", "bun"]),
-        ("python",    ["pip"]),
+        ("python",    ["pip", "uv"]),
         ("rust",      ["cargo", "rustup-targets"]),
         ("go",        ["go"]),
         ("jvm",       ["gradle", "maven"]),
@@ -66,6 +66,21 @@ enum DevProfile {
         }
     }
 
+    /// 둘러보기용 페르소나 키 (실제 판정과 무관하게 모든 타입을 구경)
+    static let galleryKeys = ["polyglot", "node", "rust", "container", "apple", "python",
+                              "ml", "jvm", "go", "php", "dotnet", "deno", "dart", "webtest", "brew", "clean"]
+
+    /// 둘러보기 항목 — 이모지 + 별명만 (설명은 실제로 그 성향이 됐을 때 보이는 "해금" 재미)
+    static func galleryItem(_ key: String, lang: AppLanguage) -> (emoji: String, title: String) {
+        switch key {
+        case "clean":    return ("🧹", tr("profile.title.clean", lang))
+        case "polyglot": return ("🧰", tr("profile.title.polyglot", lang))
+        default:
+            let m = meta(key)
+            return (m.emoji, tr(m.titleKey, lang))
+        }
+    }
+
     // MARK: - 스택 분포
 
     struct EcoSlice: Identifiable { var id: String { name }; let name: String; let sizeKB: Int }
@@ -103,19 +118,59 @@ enum DevProfile {
     struct Badge: Identifiable { var id: String { title }; let emoji: String; let title: String }
 
     /// 캐시 구성·누적 회수량으로 획득한 배지
-    static func badges(_ cats: [CacheCategory], reclaimedKB: Int, lang: AppLanguage) -> [Badge] {
-        func size(_ ns: Set<String>) -> Int { cats.filter { ns.contains($0.name) }.reduce(0) { $0 + $1.sizeKB } }
-        func has(_ ns: Set<String>) -> Bool { size(ns) > 0 }
-        var out: [Badge] = []
-        let nodeMgrs = cats.filter { ["npm", "yarn", "pnpm", "bun"].contains($0.name) && $0.sizeKB > 0 }.count
-        if nodeMgrs >= 2 { out.append(Badge(emoji: "🧩", title: tr("badge.multimanager", lang))) }
-        if has(["docker", "colima"]) { out.append(Badge(emoji: "🐳", title: tr("badge.container", lang))) }
-        if size(["cargo", "rustup-targets"]) > 200 * 1024 { out.append(Badge(emoji: "🦀", title: tr("badge.compile", lang))) }
-        if has(["huggingface"]) { out.append(Badge(emoji: "🤖", title: tr("badge.ml", lang))) }
-        if has(["playwright"]) { out.append(Badge(emoji: "🎭", title: tr("badge.e2e", lang))) }
-        if has(["xcode", "swiftpm", "cocoapods", "xcode-sim"]) { out.append(Badge(emoji: "🍎", title: tr("badge.apple", lang))) }
-        if breakdown(cats).count >= 5 { out.append(Badge(emoji: "📦", title: tr("badge.hoarder", lang))) }
-        if reclaimedKB > 1024 * 1024 { out.append(Badge(emoji: "🧹", title: tr("badge.cleanup", lang))) }
-        return out
+    struct BadgeDef { let key: String; let emoji: String; let test: ([CacheCategory], Int) -> Bool }
+
+    private static func catSize(_ cats: [CacheCategory], _ ns: Set<String>) -> Int {
+        cats.filter { ns.contains($0.name) }.reduce(0) { $0 + $1.sizeKB }
+    }
+
+    /// 전체 배지 정의 (조건 충족분만 표시). 총 개수 = allBadges.count
+    static let allBadges: [BadgeDef] = [
+        .init(key: "multimanager", emoji: "🧩", test: { c, _ in c.filter { ["npm","yarn","pnpm","bun"].contains($0.name) && $0.sizeKB > 0 }.count >= 2 }),
+        .init(key: "container",    emoji: "🐳", test: { c, _ in catSize(c, ["docker","colima"]) > 0 }),
+        .init(key: "compile",      emoji: "🦀", test: { c, _ in catSize(c, ["cargo","rustup-targets"]) > 200 * 1024 }),
+        .init(key: "ml",           emoji: "🤖", test: { c, _ in catSize(c, ["huggingface"]) > 0 }),
+        .init(key: "e2e",          emoji: "🎭", test: { c, _ in catSize(c, ["playwright"]) > 0 }),
+        .init(key: "apple",        emoji: "🍎", test: { c, _ in catSize(c, ["xcode","swiftpm","cocoapods","xcode-sim"]) > 0 }),
+        .init(key: "hoarder",      emoji: "📦", test: { c, _ in breakdown(c).count >= 5 }),
+        .init(key: "cleanup",      emoji: "🧹", test: { _, r in r > 1024 * 1024 }),
+        .init(key: "diskhog",      emoji: "🗄️", test: { c, _ in c.reduce(0) { $0 + $1.sizeKB } > 10 * 1024 * 1024 }),
+        .init(key: "polymaster",   emoji: "🌐", test: { c, _ in breakdown(c).count >= 8 }),
+        .init(key: "vmheavy",      emoji: "🏗️", test: { c, _ in catSize(c, ["docker","colima"]) > 3 * 1024 * 1024 }),
+        .init(key: "datasci",      emoji: "📊", test: { c, _ in catSize(c, ["pip"]) > 0 && catSize(c, ["huggingface"]) > 0 }),
+        .init(key: "early",        emoji: "🚀", test: { c, _ in catSize(c, ["deno","bun"]) > 0 }),
+        .init(key: "builder",      emoji: "🔨", test: { c, _ in [Set(["cargo","rustup-targets"]), Set(["go"]), Set(["gradle","maven"])].filter { catSize(c, $0) > 0 }.count >= 2 }),
+        .init(key: "crossplat",    emoji: "🎯", test: { c, _ in catSize(c, ["pub"]) > 0 }),
+        .init(key: "cleanmaster",  emoji: "🏆", test: { _, r in r > 10 * 1024 * 1024 }),
+    ]
+
+    /// 시즌제 — 만료(획득 후 기간 경과)된 배지는 제거하고, 비활성 배지는 현재 조건으로 재판정.
+    /// earned: [배지키: 획득 epoch초]. now/periodDays 기준으로 갱신된 맵을 반환.
+    static func refreshEarned(_ earned: [String: Double], cats: [CacheCategory], reclaimedKB: Int,
+                              now: Double, periodDays: Int) -> [String: Double] {
+        let span = Double(periodDays) * 86_400
+        var result = earned
+        for def in allBadges {
+            let active = result[def.key].map { now - $0 < span } ?? false
+            if !active {                                   // 만료 or 미획득 → 재판정
+                if def.test(cats, reclaimedKB) { result[def.key] = now }
+                else { result[def.key] = nil }
+            }                                              // active면 시각 유지(기간 내 보존)
+        }
+        return result
+    }
+
+    /// 기간 내(활성) 배지 키 목록 (언어 무관 — 표시 시점에 tr 적용)
+    static func activeKeys(_ earned: [String: Double], now: Double, periodDays: Int) -> [String] {
+        let span = Double(periodDays) * 86_400
+        return allBadges.compactMap { def in
+            guard let t = earned[def.key], now - t < span else { return nil }
+            return def.key
+        }
+    }
+
+    /// 배지 키 → 이모지
+    static func emoji(forKey key: String) -> String {
+        allBadges.first { $0.key == key }?.emoji ?? "🏅"
     }
 }

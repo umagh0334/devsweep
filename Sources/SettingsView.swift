@@ -137,6 +137,22 @@ struct AdvancedSettings: View {
     let engine: Engine
     @Environment(\.appLanguage) private var lang
     @AppStorage("olderThanDays") private var olderThanDays = 0
+    @AppStorage("badgePeriodDays") private var badgePeriodDays = 30
+    @AppStorage("autoClean") private var autoClean = false
+    @AppStorage("autoCleanPeriod") private var autoCleanPeriod = 0      // 0=매일 1=매주 2=매월
+    @AppStorage("autoLastRunTs") private var autoLastRunTs = 0
+
+    private var lastRunText: String {
+        guard autoLastRunTs > 0 else { return tr("auto.never", lang) }
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .short
+        return f.string(from: Date(timeIntervalSince1970: TimeInterval(autoLastRunTs)))
+    }
+    private var autoFooter: String {
+        var s = tr("auto.toggleDesc", lang)
+        // headless 권한 한계는 신뢰성 있게 감지하기 어려워(정상 0회수와 구분 불가) 켜졌을 때 상시 안내
+        if autoClean { s += "\n\n" + tr("auto.fda", lang) }
+        return s
+    }
 
     var body: some View {
         Form {
@@ -158,13 +174,56 @@ struct AdvancedSettings: View {
             } footer: {
                 Text(tr("age.note", lang)).fixedSize(horizontal: false, vertical: true)
             }
-            // 자동 정리 (준비 중)
+            // 자동 정리 (launchd 주기 실행)
             Section {
-                LabeledContent(tr("set.schedule", lang)) {
-                    Text(tr("adv.soon", lang)).foregroundStyle(.secondary)
+                Toggle(isOn: $autoClean) { Text(tr("auto.toggle", lang)) }
+                    .onChange(of: autoClean) { _, on in
+                        let p = autoCleanPeriod, o = olderThanDays
+                        DispatchQueue.global(qos: .utility).async {   // launchctl·파일복사가 메인스레드 안 막게
+                            if on { AutoClean.enable(period: p, olderThanDays: o) } else { AutoClean.disable() }
+                        }
+                    }
+                    .onChange(of: olderThanDays) { _, o in
+                        guard autoClean else { return }
+                        let p = autoCleanPeriod
+                        DispatchQueue.global(qos: .utility).async { AutoClean.enable(period: p, olderThanDays: o) }
+                    }
+                if autoClean {
+                    LabeledContent(tr("auto.period", lang)) {
+                        Picker("", selection: $autoCleanPeriod) {
+                            Text(tr("auto.daily", lang)).tag(0)
+                            Text(tr("auto.weekly", lang)).tag(1)
+                            Text(tr("auto.monthly", lang)).tag(2)
+                        }
+                        .labelsHidden().fixedSize()
+                        .onChange(of: autoCleanPeriod) { _, p in
+                            let o = olderThanDays
+                            DispatchQueue.global(qos: .utility).async { AutoClean.enable(period: p, olderThanDays: o) }
+                        }
+                    }
+                    LabeledContent(tr("auto.lastRun", lang)) {
+                        Text(lastRunText).foregroundStyle(.secondary)
+                    }
                 }
+            } header: {
+                Text(tr("set.schedule", lang))
             } footer: {
-                Text(tr("coming.scheduleDesc", lang)).fixedSize(horizontal: false, vertical: true)
+                Text(autoFooter).fixedSize(horizontal: false, vertical: true)
+            }
+            // 배지 유지 기간 (개발자 탭 시즌제 배지)
+            Section {
+                LabeledContent(tr("badge.keep", lang)) {
+                    Picker("", selection: $badgePeriodDays) {
+                        Text(tr("badge.monthsFmt", lang, 1)).tag(30)
+                        Text(tr("badge.monthsFmt", lang, 3)).tag(90)
+                        Text(tr("badge.monthsFmt", lang, 6)).tag(180)
+                    }
+                    .labelsHidden().fixedSize()
+                }
+            } header: {
+                Text(tr("dev.badges", lang))
+            } footer: {
+                Text(tr("badge.keepDesc", lang)).fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
@@ -226,36 +285,132 @@ struct DeveloperSettings: View {
     let engine: Engine
     @Environment(\.appLanguage) private var lang
     @AppStorage("totalReclaimedKB") private var totalReclaimedKB = 0
+    @AppStorage("badgeEarned") private var badgeEarnedJSON = "{}"        // {배지키: 획득 epoch초}
+    @AppStorage("badgePeriodDays") private var badgePeriodDays = 30      // 시즌 유지 기간 (기본 1달)
+    @State private var showGallery = false
+    @State private var showBadgeGallery = false
+    @State private var shownKeys: [String] = []
 
     var body: some View {
         let slices = DevProfile.breakdown(engine.categories)
-        let badges = DevProfile.badges(engine.categories, reclaimedKB: totalReclaimedKB, lang: lang)
         return Form {
             Section { profileCard }
             if !slices.isEmpty {
                 Section { breakdownView(slices) } header: { Text(tr("dev.breakdown", lang)) }
             }
-            if !badges.isEmpty {
-                Section { badgesView(badges) } header: { Text(tr("dev.badges", lang)) }
+            if !shownKeys.isEmpty {
+                Section { badgesView(shownKeys) } header: { badgeHeader }
             }
         }
         .formStyle(.grouped)
-        .task { if engine.categories.isEmpty { await engine.scan() } }
+        .task {
+            if engine.categories.isEmpty { await engine.scan() }
+            refreshBadges()
+        }
     }
 
-    /// 캐시 분포로 추정한 개발 성향 카드
+    /// 배지 섹션 헤더 — "획득 배지 (n/총)" + 우측 […]로 전체 배지 목록. 유지 기간은 고급 설정에.
+    private var badgeHeader: some View {
+        HStack(spacing: 6) {
+            Text(tr("dev.badges", lang))
+            Text("(\(shownKeys.count)/\(DevProfile.allBadges.count))")
+                .foregroundStyle(.secondary).monospacedDigit()
+            Spacer()
+            Button { showBadgeGallery = true } label: {
+                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(tr("dev.allBadges", lang))
+            .popover(isPresented: $showBadgeGallery, arrowEdge: .top) { badgeGalleryPopover }
+        }
+    }
+
+    /// 전체 배지 목록 — 획득은 컬러+체크, 미획득은 흐림+자물쇠 (보기 전용).
+    /// Grid 3열[이모지·이름·상태] — 이름 열이 가장 긴 배지명에 맞춰지고 상태는 우측 열에 정렬.
+    /// 폭은 열 합(내용)에 맞춰 자동(fixedSize), 상태(✓/🔒)는 우측.
+    private var badgeGalleryPopover: some View {
+        ScrollView {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 11) {
+                ForEach(DevProfile.allBadges, id: \.key) { b in
+                    let earned = shownKeys.contains(b.key)
+                    GridRow {
+                        Text(b.emoji).font(.title3).opacity(earned ? 1 : 0.45)
+                        Text(tr("badge.\(b.key)", lang)).font(.callout)
+                            .foregroundStyle(earned ? .primary : .secondary)
+                        Group {
+                            if earned { Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.sweep) }
+                            else { Image(systemName: "lock.fill").foregroundStyle(.tertiary) }
+                        }
+                        .font(.caption)
+                        .gridColumnAlignment(.trailing)
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .frame(maxHeight: 360)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// 시즌제 배지 갱신: 만료 제거 + 신규 획득 저장 후 표시 키 산출 (개발자 탭 진입·기간 변경 시)
+    private func refreshBadges() {
+        let now = Date().timeIntervalSince1970
+        var earned = Self.decodeBadges(badgeEarnedJSON)
+        earned = DevProfile.refreshEarned(earned, cats: engine.categories, reclaimedKB: totalReclaimedKB,
+                                          now: now, periodDays: badgePeriodDays)
+        badgeEarnedJSON = Self.encodeBadges(earned)
+        shownKeys = DevProfile.activeKeys(earned, now: now, periodDays: badgePeriodDays)
+    }
+
+    private static func decodeBadges(_ s: String) -> [String: Double] {
+        guard let d = s.data(using: .utf8),
+              let m = try? JSONDecoder().decode([String: Double].self, from: d) else { return [:] }
+        return m
+    }
+    private static func encodeBadges(_ m: [String: Double]) -> String {
+        guard let d = try? JSONEncoder().encode(m), let s = String(data: d, encoding: .utf8) else { return "{}" }
+        return s
+    }
+
+    /// 캐시 분포로 추정한 개발 성향 카드 (+ 다른 타입 둘러보기 리스트)
     private var profileCard: some View {
         let p = DevProfile.analyze(engine.categories, lang: lang)
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 11) {
-                Text(p.emoji).font(.system(size: 32))
+        return HStack(alignment: .top, spacing: 11) {
+            Text(p.emoji).font(.system(size: 32))
+            VStack(alignment: .leading, spacing: 3) {
                 Text(p.title).font(.system(.title3, design: .rounded).weight(.bold))
-                Spacer()
+                Text(p.summary).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(p.summary).font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button { showGallery = true } label: {
+                Image(systemName: "ellipsis.circle.fill").font(.title2).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(tr("dev.gallery", lang))
+            .popover(isPresented: $showGallery, arrowEdge: .top) { galleryPopover }
         }
         .padding(.vertical, 4)
+    }
+
+    /// 모든 페르소나를 둘러보는 리스트 팝오버 (보기 전용, 별명만 — 설명은 해금)
+    /// 가로 폭은 가장 긴 별명에 맞춰 자동(fixedSize), 세로만 최대 높이 제한 후 스크롤
+    private var galleryPopover: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(DevProfile.galleryKeys, id: \.self) { key in
+                    let g = DevProfile.galleryItem(key, lang: lang)
+                    HStack(spacing: 10) {
+                        Text(g.emoji).font(.title3)
+                        Text(g.title).font(.callout).fontWeight(.medium)
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .frame(maxHeight: 360)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     /// 생태계별 용량 도넛 차트 + 범례 (메인 분포 바와 같은 팔레트)
@@ -297,12 +452,12 @@ struct DeveloperSettings: View {
     }
 
     /// 획득 배지 칩 (반응형 그리드)
-    private func badgesView(_ badges: [DevProfile.Badge]) -> some View {
+    private func badgesView(_ keys: [String]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], alignment: .leading, spacing: 7) {
-            ForEach(badges) { b in
+            ForEach(keys, id: \.self) { key in
                 HStack(spacing: 5) {
-                    Text(b.emoji).font(.callout)
-                    Text(b.title).font(.caption).fontWeight(.medium)
+                    Text(DevProfile.emoji(forKey: key)).font(.callout)
+                    Text(tr("badge.\(key)", lang)).font(.caption).fontWeight(.medium)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(Capsule().fill(Theme.sweep.opacity(0.12)))

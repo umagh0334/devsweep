@@ -2,6 +2,31 @@
 
 ## 2026-06-22
 
+### ⏰ 자동 정리 (launchd 주기 실행) 구현
+- 고급 설정에 **토글 + 주기(매일/매주/매월)**. 켜면 새벽 3시 launchd LaunchAgent 가 `devsweep clean` 을 headless 실행 (보호 목록·나이 필터 그대로 적용)
+- 설계: 독립 설계안 3 + launchd 함정 전문가 워크플로 → 적대적 비평(go=true) → 비평의 high 결함(측정 의미 불일치·python3 숨은 의존·native 측정 오차) 모두 수정 반영
+  - `launchctl bootout→bootstrap gui/$UID` 멱등(EBUSY 회피), `RunAtLoad=false`(켜자마자 삭제 방지), `StartCalendarInterval`(Day:1·Minute:0 고정)
+  - 엔진/래퍼를 `~/Library/Application Support/DevSweep/engine/` 로 복사(번들 경로 불안정 회피) + 버전 self-heal
+  - 회수량: **`devsweep total` 신설**(clean과 동일 타겟의 KB만 출력) → 래퍼가 before/after diff(python3 등 외부 의존 0). `runs.jsonl` append만, 앱이 워터마크 reconcile 로 `totalReclaimedKB` 단독 write (cfprefsd 레이스 차단)
+  - TCC: `~/Library/Caches` 계열은 headless 권한으로 빠질 수 있어 blocked 시 전체 디스크 접근 안내(과약속 안 함)
+- 신규 `AutoClean.swift`, `devsweep cmd_total`, `auto.*` 12언어. 미사용 `adv.soon`/`coming.scheduleDesc` 제거
+- **적대적 코드 리뷰**(3차원 병렬 → 확정 검증, 18후보→5확정) 반영: ① 회수량을 before/after diff→**정리 직전 추정치**로 통일(네이티브 명령이 측정 경로 밖을 비우는 불일치 해소) ② reconcile 워터마크 ts→**라인카운트**(같은 초 다중 run 누락 방지) ③ onChange의 launchctl/파일복사 **백그라운드 디스패치**(메인스레드 블로킹/UI 끊김 제거) ④ 신뢰 못 할 'blocked' 휴리스틱 제거 → FDA 안내 상시화(정상 0회수 오탐 방지)
+- 검증: 빌드, `total` 일관성, launchctl bootstrap/bootout/kickstart 메커니즘 + EBUSY 재현, reconcile 멱등성·증분(라인카운트, 같은 초 안전), UI 렌더, 잔여 에이전트 0
+
+### 🔭 홈 폴더 캐시 전수 검토 → uv·codex 추가
+- `~/` 숨김 폴더 전수 조사 후 안전한 캐시만 선별 추가. 카테고리 29→31개
+- **uv**(Python, Astral): `~/.cache/uv`(+`~/Library/Caches/uv`) 222M, 네이티브 `uv cache clean`. SAFE. `~/.local/share/uv`(설치된 파이썬·툴)은 데이터라 제외
+- **codex 런타임**: `~/.cache/codex-runtimes` 1.4G, 재다운로드 비용 커서 HEAVY + NO_AGE(런타임 all-or-nothing). `~/.codex`(세션·설정)은 제외
+- 큰데 캐시 아닌 것 의도적 제외: `.colima`(58G VM 디스크), `.vscode`(1.3G 설치 확장), `.claude`(대화·프로젝트 데이터), `.nvm`(설치된 Node 버전), `.rustup`(툴체인)
+
+### 💻 IDE 캐시 지원 추가
+- 패키지 매니저 외 IDE 캐시 5종: **JetBrains · VS Code · Cursor · Android Studio · Zed** (Xcode DerivedData는 기존 지원). 카테고리 23→28개
+- 순수 캐시/인덱스 디렉토리만 (설정·확장·워크스페이스 상태 제외). JetBrains·Android Studio는 재인덱싱 비용 커서 HEAVY 분류
+- `devsweep` CLI에 `SAFE/HEAVY_CATS` 등록 + `do_<name>` 핸들러 + `cmd_detail` 메타(kind=재생성·safety·command)만 추가하면 GUI(리스트·스택 도넛·배지)는 `--json`으로 자동 반영, `code` 아이콘
+- 검증: vscode 148MB(CachedData 132MB) 측정, 미설치 IDE는 0으로 "캐시 없음" 그룹
+- **codemate(자체 IDE) 추가**: `~/.codemate`는 대부분 비-캐시(lib·bin 본체, local.db, auth, settings)라 **로그/캐시만**(`userdata/logs` 83M + `caches` + `daemon.log`) 타겟. 검증 85MB. 본체·DB·인증·설정은 제외
+- cmux는 미추가 — 진짜 캐시 없이 활성 이벤트 로그(events.jsonl 등)뿐이고, cmux.app이 세션을 실시간 구동 중이라 정리 대상으로 부적합
+
 ### 🪟 설정 창이 재실행 시 같이 뜨던 문제 수정
 - 설정 창을 켠 채 앱을 종료하면, 다시 실행할 때 macOS **창 상태 복원**으로 설정 창까지 같이 팝업되던 버그
 - Info.plist `NSQuitAlwaysKeepsWindows=false` 로 창 복원 비활성화. 메인 창은 `WindowGroup`이라 항상 새로 생성되므로 영향 없고, 보조 `Window`(설정)만 복원에서 빠짐
@@ -14,7 +39,12 @@
 - **전 언어 번역**: 페르소나(별명 17 + 멘트 17) + 배지 8 = 42키를 12개 언어로 (`profile.title.*` / `profile.sum.*` / `badge.*`). `DevProfile`을 `ko ? :` 분기에서 `tr()` 기반으로 리팩토링 — 멘트의 용량은 `%@`, 생태계 수는 `%d` 포맷. 생태계명(Node·Rust·Homebrew…)은 고유명사라 미번역
 - 검증: 일본어 전환 시 "フルスタック雑食 / 6個のエコシステム… / マルチマネージャ" 정상
 - **스택 분포 도넛 차트**: 생태계별 용량을 도넛으로 시각화 — `Circle().trim(from:to:)` 누적(의존성 0, Swift Charts 미사용)으로 섹터를 그리고, 중앙에 총합 + 우측 범례(색·이름·용량). 메인 분포 바와 같은 팔레트(`Theme.segment`)
-- **획득 배지(업적)**: 멀티 매니저(node 매니저 2개+) / 컨테이너 운영 / 컴파일 인내(rust 200MB+) / ML 탐험가 / E2E 신봉자 / 애플 개발자 / 패키지 수집가(생태계 5개+) / 정리왕(누적 회수 1GB+) — 조건 충족분만 칩으로
+- **획득 배지(업적) 16종**: 멀티 매니저(node 매니저 2개+) / 컨테이너 운영 / 컴파일 인내(rust 200MB+) / ML 탐험가 / E2E 신봉자 / 애플 개발자 / 패키지 수집가(생태계 5종+) / 정리왕(누적 1GB+) / 디스크 대식가(총 10GB+) / 다언어 마스터(생태계 8종+) / VM 헤비웨이트(컨테이너 3GB+) / 데이터 사이언티스트(python+ML) / 얼리어답터(deno·bun) / 빌드 장인(컴파일 언어 2종+) / 크로스플랫폼(Dart) / 정리 마스터(누적 10GB+) — 조건 충족분만 칩으로. 모두 독립 조건이라 이론적 컴플리션 가능
+- **배지 (획득/총) 카운터 + 전체 배지 목록**: 헤더가 "획득 배지 (5/16)"(카운터를 제목 바로 옆) + 우측 […] 버튼 → 팝오버에 전체 16개 표시(`Grid` 3열[이모지·이름·상태], 획득=컬러+✓·미획득=흐림+🔒 **우측 정렬**, 폭은 이름 열에 맞춰 유동). 배지 정의를 `allBadges` 데이터 배열로 리팩토링해 총 개수 자동 산출
+- **시즌제 배지**: 한 번 획득하면 유지 기간(1·3·6개월 선택, 기본 1달) 동안은 캐시를 정리해도 유지되고, 만료되면 현재 조건으로 재판정. 획득 시각을 `@AppStorage`(badgeEarned JSON)에 저장하고 진입·기간변경 시 `refreshEarned`로 만료 제거+신규 획득. 검증: 미충족 배지를 10일 전 획득으로 심으니 1달 기간 내라 칩 유지됨(6/16)
+- **유지 기간 설정은 고급 설정으로 이동**: 개발자 탭 배지 헤더에선 (획득/총) 카운터만, 기간(1·3·6개월) 선택은 고급 설정 > 획득 배지 섹션에 picker + 설명
+- **다른 타입 둘러보기**: 성향 카드 우측 […] 버튼 → 팝오버에 전체 페르소나 **별명만** 나열 (보기 전용). 설명은 실제로 그 성향이 됐을 때 카드에서 보이는 "해금" 재미 (`galleryItem`은 이모지+별명만 반환). 팝오버 폭은 가장 긴 별명에 맞춰 자동 조절(`fixedSize(horizontal:)`)
+- **성향 카드 레이아웃**: 설명을 이름 바로 아래(아이콘 옆 텍스트 블록)로 정렬
 
 ### 🔧 나이 필터로 0이 된 항목 안내 (혼란 완화)
 - "보호 해제했는데 체크 안 됨" 신고 → 진단 결과 **보호 버그 아님**. 나이 필터("오래된 항목만") 켜진 상태에서 최근 캐시(colima 317MB 등)가 나이 기준 0으로 잡혀 "캐시 없음"+비활성된 것. 보호 해제(`protected=false`)는 정상 반영됐지만 `!hasSize`(나이 0)로 잠금 유지

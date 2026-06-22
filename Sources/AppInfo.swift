@@ -4,7 +4,7 @@ import Foundation
 /// ⚠️ repoOwner / repoName / author 는 추측값. 실제 값으로 확인·수정 필요.
 enum AppInfo {
     static var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
     }
     static let author  = "Wyatt"
     static let license = "MIT License"
