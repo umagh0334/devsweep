@@ -1,0 +1,597 @@
+#!/usr/bin/env bash
+#
+# devsweep — 개인용 개발 캐시/임시파일 정리 도구
+#
+#   설계 원칙:
+#     1) 화이트리스트 방식 — 지워도 되는 경로/명령만 명시. 모르는 건 안 건드림.
+#     2) 기본 dry-run    — 그냥 실행하면 "뭘 얼마나 지울지"만 보여줌. 실제 삭제는 --yes.
+#     3) 네이티브 우선   — brew/docker/npm 등은 공식 cleanup 명령을 쓰고, 없으면 rm.
+#
+#   사용법:
+#     devsweep                 현황 스캔 (용량만, 아무것도 안 지움)
+#     devsweep list            지원 카테고리 목록
+#     devsweep --json          스캔 결과를 JSON으로 출력 (GUI 연동용)
+#     devsweep detail <cat>    카테고리 1개 상세 정보를 JSON으로 (GUI 펼침뷰용)
+#     devsweep clean           정리 미리보기 (dry-run, 안전 카테고리 전체)
+#     devsweep clean --yes     실제 정리 실행
+#     devsweep clean gradle npm        특정 카테고리만 미리보기
+#     devsweep clean --yes gradle npm  특정 카테고리만 실제 정리
+#     devsweep clean --yes all         heavy 포함 전체 정리
+#
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────
+#  카테고리 정의
+#    SAFE_CATS  : `clean`/`clean all`에 포함되는 기본 안전 카테고리
+#    HEAVY_CATS : 재설치/재다운로드 비용이 큰 것 — 이름을 직접 지정해야만 정리
+# ─────────────────────────────────────────────────────────────
+SAFE_CATS=(gradle npm yarn pnpm bun pip cargo go maven cocoapods swiftpm composer nuget deno pub brew docker colima xcode)
+HEAVY_CATS=(playwright rustup-targets xcode-sim huggingface)
+# 네이티브 cleanup 명령(또는 prune)으로 정리되는 카테고리 — 나이 필터(--older-than) 미적용
+NATIVE_CATS=(npm yarn pnpm pip brew docker rustup-targets go nuget xcode-sim)
+# 경로가 없어(VM/메타데이터) 나이 필터(--older-than) 측정·정리가 불가능한 카테고리
+NO_AGE_CATS=(docker rustup-targets xcode-sim)
+
+# ─────────────────────────────────────────────────────────────
+#  보호 목록 (protect list)
+#    ~/.config/devsweep/config 의 `protect=cat1,cat2` 라인에 적힌 카테고리는
+#    화이트리스트에 있어도 정리/관여하지 않는다. (남겨둬야 하는 캐시 보호용)
+#    화이트리스트(지울 것만 명시) 위에 얹는, "특정 카테고리만 영구 dry-run".
+# ─────────────────────────────────────────────────────────────
+DEVSWEEP_CONFIG="${DEVSWEEP_CONFIG:-$HOME/.config/devsweep/config}"
+PROTECTED=()
+if [ -f "$DEVSWEEP_CONFIG" ]; then
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    _line="${_line%%#*}"                       # 주석 제거
+    case "$_line" in
+      protect=*)
+        IFS=',' read -ra _items <<<"${_line#protect=}"
+        for _it in "${_items[@]}"; do
+          _it="${_it//[[:space:]]/}"           # 공백 제거
+          [ -n "$_it" ] && PROTECTED+=("$_it")
+        done ;;
+    esac
+  done < "$DEVSWEEP_CONFIG"
+fi
+
+# 색상 (터미널 아닐 땐 비활성)
+if [ -t 1 ]; then
+  C_DIM=$'\033[2m'; C_B=$'\033[1m'; C_G=$'\033[32m'; C_Y=$'\033[33m'; C_R=$'\033[31m'; C_0=$'\033[0m'
+else
+  C_DIM=''; C_B=''; C_G=''; C_Y=''; C_R=''; C_0=''
+fi
+
+# ── 유틸 ─────────────────────────────────────────────────────
+
+# 경로들의 합산 용량을 KB로 (존재하는 것만)
+paths_size_kb() {
+  local total=0 kb p
+  for p in "$@"; do
+    [ -e "$p" ] || continue
+    if [ -n "${AGE_DAYS:-}" ]; then
+      # 나이 필터: mtime 기준 N일보다 오래된 파일 크기(byte)만 합산 → KB
+      local bytes
+      bytes=$(find "$p" -type f -mtime +"$AGE_DAYS" -exec stat -f%z {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
+      kb=$(( ${bytes:-0} / 1024 ))
+    else
+      kb=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
+    fi
+    total=$((total + ${kb:-0}))
+  done
+  echo "$total"
+}
+
+# KB → 사람이 읽는 단위
+human() {
+  local kb=${1:-0}
+  if   [ "$kb" -ge 1048576 ]; then awk "BEGIN{printf \"%.1fG\", $kb/1048576}"
+  elif [ "$kb" -ge 1024 ];    then awk "BEGIN{printf \"%.0fM\", $kb/1024}"
+  else echo "${kb}K"; fi
+}
+
+# 존재하는 경로만 안전하게 삭제 (빈 변수 방어)
+wipe() {
+  local p
+  for p in "$@"; do
+    [ -n "$p" ] && [ -e "$p" ] || continue
+    if [ -n "${AGE_DAYS:-}" ]; then
+      # 나이 필터: mtime 기준 N일보다 오래된 파일만 삭제 후 빈 디렉터리 정리
+      find "$p" -type f -mtime +"$AGE_DAYS" -delete 2>/dev/null || true
+      find "$p" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    else
+      rm -rf -- "$p"
+    fi
+  done
+}
+
+# JSON 객체 한 개 출력 (GUI 연동용). heavy 여부는 HEAVY_CATS 소속으로 판정.
+#   usage: emit_json <name> <size_kb> <kind>
+emit_json() {
+  local heavy=false protected=false
+  is_in "$1" "${HEAVY_CATS[@]}" && heavy=true
+  is_protected "$1" && protected=true
+  printf '{"name":"%s","size_kb":%s,"kind":"%s","heavy":%s,"protected":%s}' "$1" "${2:-0}" "$3" "$heavy" "$protected"
+}
+
+# JSON 문자열 값 이스케이프 (역슬래시/큰따옴표). detail 모드의 command/note용.
+json_escape() { printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# ── 카테고리별 핸들러: do_<cat> <action>  (action = size|dry|clean) ──
+#   size  : KB 숫자만 출력
+#   dry   : 사람이 읽을 미리보기 한 줄
+#   clean : 실제 정리 수행
+
+# 경로 기반 카테고리를 위한 공통 처리기
+#   usage: handle_paths <action> <라벨> <유형> -- path...
+handle_paths() {
+  local action="$1" label="$2" kind="$3"; shift 4   # 4번째 "--" 버림
+  case "$action" in
+    size) paths_size_kb "$@" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "$label" "$(human "$(paths_size_kb "$@")")" "$kind" ;;
+    json) emit_json "$label" "$(paths_size_kb "$@")" "$kind" ;;
+    paths) printf '%s\n' "$@" ;;
+    clean) wipe "$@" ;;
+  esac
+}
+
+do_gradle() { handle_paths "$1" "gradle" "재생성" -- \
+  "$HOME/.gradle/caches" "$HOME/.gradle/daemon" "$HOME/.gradle/wrapper/dists" "$HOME/.gradle/native"; }
+
+do_bun()    { handle_paths "$1" "bun" "재다운로드" -- "$HOME/.bun/install/cache"; }
+
+do_cargo()  { handle_paths "$1" "cargo" "재다운로드" -- \
+  "$HOME/.cargo/registry/cache" "$HOME/.cargo/registry/src" "$HOME/.cargo/git/checkouts" "$HOME/.cargo/git/db"; }
+
+do_xcode()  { handle_paths "$1" "xcode" "재생성" -- "$HOME/Library/Developer/Xcode/DerivedData"; }
+
+do_playwright() { handle_paths "$1" "playwright" "재다운로드(무거움)" -- "$HOME/Library/Caches/ms-playwright"; }
+
+# ── 추가 카테고리 (경로형) ──
+do_maven()     { handle_paths "$1" "maven" "재다운로드" -- "$HOME/.m2/repository"; }
+do_cocoapods() { handle_paths "$1" "cocoapods" "재다운로드" -- "$HOME/Library/Caches/CocoaPods"; }
+do_swiftpm()   { handle_paths "$1" "swiftpm" "재생성" -- "$HOME/Library/Caches/org.swift.swiftpm" "$HOME/Library/org.swift.swiftpm"; }
+do_composer()  { handle_paths "$1" "composer" "재다운로드" -- "$HOME/Library/Caches/composer" "$HOME/.composer/cache"; }
+do_deno()      { handle_paths "$1" "deno" "재다운로드" -- "$HOME/Library/Caches/deno"; }
+do_pub()       { handle_paths "$1" "pub" "재다운로드" -- "$HOME/.pub-cache"; }
+# colima: Library/Caches/colima(다운로드 캐시)만. ~/.colima/_disks(컨테이너 데이터)는 절대 제외.
+do_colima()    { handle_paths "$1" "colima" "재다운로드" -- "$HOME/Library/Caches/colima"; }
+do_huggingface() { handle_paths "$1" "huggingface" "재다운로드(무거움)" -- "$HOME/.cache/huggingface"; }
+
+# go: 네이티브 go clean 우선 (modcache는 읽기전용이라 rm 전 chmod 필요)
+do_go() {
+  local p=("$HOME/Library/Caches/go-build" "$HOME/go/pkg/mod")
+  case "$1" in
+    size) paths_size_kb "${p[@]}" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "go" "$(human "$(paths_size_kb "${p[@]}")")" "재다운로드" ;;
+    json) emit_json go "$(paths_size_kb "${p[@]}")" "재다운로드" ;;
+    paths) printf '%s\n' "${p[@]}" ;;
+    clean) command -v go >/dev/null 2>&1 && go clean -cache -modcache >/dev/null 2>&1 \
+           || { chmod -R u+w "$HOME/go/pkg/mod" 2>/dev/null; wipe "${p[@]}"; } ;;
+  esac
+}
+
+# nuget: dotnet 네이티브 우선
+do_nuget() {
+  local dir="$HOME/.nuget/packages"
+  case "$1" in
+    size) paths_size_kb "$dir" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "nuget" "$(human "$(paths_size_kb "$dir")")" "재다운로드" ;;
+    json) emit_json nuget "$(paths_size_kb "$dir")" "재다운로드" ;;
+    paths) printf '%s\n' "$dir" ;;
+    clean) command -v dotnet >/dev/null 2>&1 && dotnet nuget locals all --clear >/dev/null 2>&1 || wipe "$dir" ;;
+  esac
+}
+
+# xcode-sim: 사용 불가 시뮬레이터 삭제 (용량 측정 불가 → 0)
+do_xcode-sim() {
+  case "$1" in
+    size) echo 0 ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "xcode-sim" "  ~?" "사용불가 시뮬레이터" ;;
+    json) emit_json xcode-sim 0 "사용불가 시뮬레이터" ;;
+    paths) : ;;
+    clean) command -v xcrun >/dev/null 2>&1 && xcrun simctl delete unavailable >/dev/null 2>&1 || true ;;
+  esac
+}
+
+# npm: 네이티브 cleanup 우선
+do_npm() {
+  case "$1" in
+    size) paths_size_kb "$HOME/.npm/_cacache" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "npm" "$(human "$(paths_size_kb "$HOME/.npm/_cacache")")" "재다운로드" ;;
+    json) emit_json npm "$(paths_size_kb "$HOME/.npm/_cacache")" "재다운로드" ;;
+    paths) printf '%s\n' "$HOME/.npm/_cacache" ;;
+    clean)
+      if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || wipe "$HOME/.npm/_cacache"
+      else wipe "$HOME/.npm/_cacache"; fi ;;
+  esac
+}
+
+do_yarn() {
+  local dir; dir="$HOME/Library/Caches/Yarn"
+  case "$1" in
+    size) paths_size_kb "$dir" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "yarn" "$(human "$(paths_size_kb "$dir")")" "재다운로드" ;;
+    json) emit_json yarn "$(paths_size_kb "$dir")" "재다운로드" ;;
+    paths) printf '%s\n' "$dir" ;;
+    clean) command -v yarn >/dev/null 2>&1 && yarn cache clean >/dev/null 2>&1 || wipe "$dir" ;;
+  esac
+}
+
+do_pnpm() {
+  local dir; dir="$HOME/Library/pnpm/store"
+  [ -d "$dir" ] || dir="$HOME/.pnpm-store"
+  case "$1" in
+    size) paths_size_kb "$dir" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "pnpm" "$(human "$(paths_size_kb "$dir")")" "재다운로드" ;;
+    json) emit_json pnpm "$(paths_size_kb "$dir")" "재다운로드" ;;
+    paths) printf '%s\n' "$dir" ;;
+    clean) command -v pnpm >/dev/null 2>&1 && pnpm store prune >/dev/null 2>&1 || wipe "$dir" ;;
+  esac
+}
+
+do_pip() {
+  local dir; dir="$HOME/Library/Caches/pip"
+  case "$1" in
+    size) paths_size_kb "$dir" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "pip" "$(human "$(paths_size_kb "$dir")")" "재다운로드" ;;
+    json) emit_json pip "$(paths_size_kb "$dir")" "재다운로드" ;;
+    paths) printf '%s\n' "$dir" ;;
+    clean) command -v pip3 >/dev/null 2>&1 && pip3 cache purge >/dev/null 2>&1 || wipe "$dir" ;;
+  esac
+}
+
+do_brew() {
+  local dir; dir="$HOME/Library/Caches/Homebrew"
+  case "$1" in
+    size) paths_size_kb "$dir" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "brew" "$(human "$(paths_size_kb "$dir")")" "재다운로드" ;;
+    json) emit_json brew "$(paths_size_kb "$dir")" "재다운로드" ;;
+    paths) printf '%s\n' "$dir" ;;
+    clean) command -v brew >/dev/null 2>&1 && brew cleanup -s --prune=all >/dev/null 2>&1 || wipe "$dir/downloads" ;;
+  esac
+}
+
+# docker: 용량은 reclaimable, 정리는 system prune
+do_docker() {
+  case "$1" in
+    size) echo 0 ;;  # docker는 VM 내부라 합산 추정에서 제외
+    dry)
+      local rec="-"
+      if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        rec=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 | awk '{print $1}')
+        [ -z "$rec" ] && rec="-"
+      fi
+      printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "docker" "$rec" "재생성(prune)"
+      ;;
+    json)
+      local rj="-"
+      if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        rj=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 | awk '{print $1}'); [ -z "$rj" ] && rj="-"
+      fi
+      emit_json docker 0 "prune ($rj)"
+      ;;
+    clean)
+      if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        docker system prune -f >/dev/null 2>&1 || true
+      fi
+      ;;
+  esac
+}
+
+# rustup: 안 쓰는 타겟 컴포넌트만 (툴체인 본체는 보존)
+do_rustup-targets() {
+  case "$1" in
+    size) echo 0 ;;  # 정확 추정 어려움
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "rustup-targets" "  ~?" "안 쓰는 std 컴포넌트" ;;
+    json) emit_json rustup-targets 0 "안 쓰는 std 컴포넌트" ;;
+    clean)
+      if command -v rustup >/dev/null 2>&1; then
+        # 현재 사용중인 호스트 타겟 외 추가 설치 타겟 제거
+        local host added t
+        host=$(rustup show 2>/dev/null | awk -F'[ ()]' '/Default host/{print $4}')
+        added=$(rustup target list --installed 2>/dev/null)
+        for t in $added; do
+          [ "$t" = "$host" ] && continue
+          rustup target remove "$t" >/dev/null 2>&1 || true
+        done
+      fi ;;
+  esac
+}
+
+# ── 명령 디스패치 ────────────────────────────────────────────
+
+is_in() { local n="$1"; shift; local x; for x in "$@"; do [ "$x" = "$n" ] && return 0; done; return 1; }
+
+# 보호 목록 소속 여부 (PROTECTED 가 비어도 안전)
+is_protected() { is_in "$1" "${PROTECTED[@]:-}"; }
+
+cmd_scan() {
+  echo "${C_B}개발 캐시 현황${C_0}  ${C_DIM}(아무것도 안 지움)${C_0}"
+  echo "────────────────────────────────────────────"
+  local c total=0 kb line
+  for c in "${SAFE_CATS[@]}" "${HEAVY_CATS[@]}"; do
+    line=$("do_$c" dry)
+    if is_protected "$c"; then printf '%s  %s🔒 보호됨%s\n' "$line" "$C_Y" "$C_0"
+    else printf '%s\n' "$line"; fi
+    kb=$("do_$c" size); total=$((total + ${kb:-0}))
+  done
+  echo "────────────────────────────────────────────"
+  printf "  %-16s ${C_B}%6s${C_0}  ${C_DIM}%s${C_0}\n" "추정 회수가능" "$(human "$total")" "(docker/rustup 제외)"
+  echo
+  echo "${C_DIM}정리하려면:  devsweep clean        (미리보기)${C_0}"
+  echo "${C_DIM}          devsweep clean --yes  (실제 실행)${C_0}"
+}
+
+cmd_list() {
+  echo "${C_B}안전 카테고리${C_0} ${C_DIM}(clean / clean all 에 포함)${C_0}"
+  printf "  %s\n" "${SAFE_CATS[*]}"
+  echo
+  echo "${C_B}heavy 카테고리${C_0} ${C_DIM}(이름을 직접 지정해야 정리됨)${C_0}"
+  printf "  %s\n" "${HEAVY_CATS[*]}"
+}
+
+# GUI 연동용: 전체 카테고리를 JSON 배열로 출력
+cmd_json() {
+  local c first=1
+  printf '['
+  for c in "${SAFE_CATS[@]}" "${HEAVY_CATS[@]}"; do
+    [ "$first" -eq 0 ] && printf ','
+    first=0
+    "do_$c" json
+  done
+  printf ']\n'
+}
+
+# GUI 펼침뷰용: 카테고리 1개의 상세 정보를 단일 JSON 객체로 출력.
+# 기존 scan/--json/clean 출력은 무변경(하위호환). set -euo pipefail 하에서
+# du/command -v/grep 실패가 JSON을 깨지 않도록 모든 외부 호출을 방어한다.
+cmd_detail() {
+  local cat="${1:-}"
+  is_in "$cat" "${SAFE_CATS[@]}" "${HEAVY_CATS[@]}" || { printf '{}\n'; return 0; }
+
+  # ── 카테고리별 정적 메타 + '현재 환경에서 실제로 도는' 명령 ──
+  local kind regen_cost regen_note command method fallback native_avail extra
+  kind="재다운로드"; regen_cost="med"; method="rm"; fallback="null"; native_avail="true"; extra=""
+
+  case "$cat" in
+    gradle)
+      kind="재생성"; regen_cost="low"
+      regen_note="다음 빌드 때 로컬에서 자동 재생성됨(네트워크 불필요, 첫 빌드만 느려짐)."
+      command="rm -rf ~/.gradle/caches ~/.gradle/daemon ~/.gradle/wrapper/dists ~/.gradle/native" ;;
+    cargo)
+      regen_note="cargo가 crates.io에서 의존성을 다시 받음."
+      command="rm -rf ~/.cargo/registry/cache ~/.cargo/registry/src ~/.cargo/git/checkouts ~/.cargo/git/db" ;;
+    bun)
+      regen_note="bun이 패키지를 다시 받음."
+      command="rm -rf ~/.bun/install/cache" ;;
+    xcode)
+      kind="재생성"; regen_cost="low"
+      regen_note="Xcode가 다음 빌드 때 DerivedData를 재생성함."
+      command="rm -rf ~/Library/Developer/Xcode/DerivedData" ;;
+    playwright)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="Playwright 브라우저(수백MB~GB)를 다시 설치해야 함. 시간 오래 걸림."
+      command="rm -rf ~/Library/Caches/ms-playwright" ;;
+    npm)
+      regen_note="npm 레지스트리에서 패키지를 다시 받음."
+      fallback="rm -rf ~/.npm/_cacache"
+      if command -v npm >/dev/null 2>&1; then method="native"; command="npm cache clean --force"
+      else method="rm"; command="rm -rf ~/.npm/_cacache"; native_avail="false"; fi ;;
+    yarn)
+      regen_note="yarn이 패키지를 다시 받음."
+      fallback="rm -rf ~/Library/Caches/Yarn"
+      if command -v yarn >/dev/null 2>&1; then method="native"; command="yarn cache clean"
+      else method="rm"; command="rm -rf ~/Library/Caches/Yarn"; native_avail="false"; fi ;;
+    pnpm)
+      regen_note="pnpm이 콘텐츠 주소 스토어를 다시 채움."
+      fallback="rm -rf ~/Library/pnpm/store"
+      if command -v pnpm >/dev/null 2>&1; then method="native"; command="pnpm store prune"
+      else method="rm"; command="rm -rf ~/Library/pnpm/store"; native_avail="false"; fi ;;
+    pip)
+      regen_note="pip이 PyPI에서 휠을 다시 받음."
+      fallback="rm -rf ~/Library/Caches/pip"
+      if command -v pip3 >/dev/null 2>&1; then method="native"; command="pip3 cache purge"
+      else method="rm"; command="rm -rf ~/Library/Caches/pip"; native_avail="false"; fi ;;
+    brew)
+      regen_note="Homebrew가 병(bottle)/소스를 다시 받음."
+      fallback="rm -rf ~/Library/Caches/Homebrew"
+      if command -v brew >/dev/null 2>&1; then method="native"; command="brew cleanup -s --prune=all"
+      else method="rm"; command="rm -rf ~/Library/Caches/Homebrew/downloads"; native_avail="false"; fi ;;
+    docker)
+      kind="prune"; regen_cost="low"
+      regen_note="미사용 이미지/컨테이너/네트워크 삭제(실행중 컨테이너는 보존). 다음 빌드/풀 때 재생성."
+      method="native"; command="docker system prune -f"
+      if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        local rec; rec=$(docker system df --format '{{.Reclaimable}}' 2>/dev/null | head -1 | awk '{print $1}' || true)
+        extra="회수 가능 추정: ${rec:-?}"
+      else native_avail="false"; extra="Docker 데몬 미실행"; fi ;;
+    rustup-targets)
+      kind="안 쓰는 std 컴포넌트"
+      regen_note="제거한 타겟은 rustup target add 로 언제든 재설치. 호스트 타겟·툴체인 본체는 보존."
+      method="native"; command="rustup target remove <비호스트 타겟>"
+      if command -v rustup >/dev/null 2>&1; then
+        local host rem
+        host=$(rustup show 2>/dev/null | awk -F'[ ()]' '/Default host/{print $4}' || true)
+        rem=$(rustup target list --installed 2>/dev/null | grep -v "^${host}$" | tr '\n' ' ' || true)
+        if [ -n "${rem// /}" ]; then extra="제거 대상: ${rem}"; else extra="제거할 비호스트 타겟 없음"; fi
+      else native_avail="false"; extra="rustup 미설치"; fi ;;
+    go)
+      regen_note="go가 모듈/빌드 캐시를 다시 받고 컴파일함."
+      fallback="rm -rf ~/Library/Caches/go-build ~/go/pkg/mod"
+      if command -v go >/dev/null 2>&1; then method="native"; command="go clean -cache -modcache"
+      else method="rm"; command="rm -rf ~/Library/Caches/go-build ~/go/pkg/mod"; native_avail="false"; fi ;;
+    maven)
+      regen_note="Maven이 중앙 저장소에서 의존성을 다시 받음."
+      command="rm -rf ~/.m2/repository" ;;
+    cocoapods)
+      regen_note="CocoaPods가 spec/pod 캐시를 다시 받음."
+      command="rm -rf ~/Library/Caches/CocoaPods" ;;
+    swiftpm)
+      kind="재생성"; regen_cost="low"
+      regen_note="SwiftPM이 패키지를 다시 resolve/빌드함."
+      command="rm -rf ~/Library/Caches/org.swift.swiftpm ~/Library/org.swift.swiftpm" ;;
+    composer)
+      regen_note="Composer가 PHP 패키지를 다시 받음."
+      command="rm -rf ~/Library/Caches/composer ~/.composer/cache" ;;
+    nuget)
+      regen_note="NuGet이 .NET 패키지를 다시 받음."
+      fallback="rm -rf ~/.nuget/packages"
+      if command -v dotnet >/dev/null 2>&1; then method="native"; command="dotnet nuget locals all --clear"
+      else method="rm"; command="rm -rf ~/.nuget/packages"; native_avail="false"; fi ;;
+    deno)
+      regen_note="Deno가 원격 모듈을 다시 받음."
+      command="rm -rf ~/Library/Caches/deno" ;;
+    pub)
+      regen_note="Dart/Flutter가 pub 패키지를 다시 받음."
+      command="rm -rf ~/.pub-cache" ;;
+    colima)
+      regen_note="colima/lima가 VM 부트 이미지를 다시 받음. VM 디스크(~/.colima/_disks, 컨테이너 데이터)는 건드리지 않음 — 그쪽은 docker 카테고리의 prune 담당."
+      command="rm -rf ~/Library/Caches/colima" ;;
+    xcode-sim)
+      kind="사용불가 시뮬레이터"; regen_cost="low"
+      regen_note="사용 불가(unavailable) 시뮬레이터 삭제. 필요 시 Xcode가 다시 만듦."
+      method="native"; command="xcrun simctl delete unavailable"
+      if command -v xcrun >/dev/null 2>&1; then native_avail="true"; else native_avail="false"; extra="xcrun 미설치"; fi ;;
+    huggingface)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="HuggingFace 모델/데이터셋(수 GB)을 다시 받아야 함."
+      command="rm -rf ~/.cache/huggingface" ;;
+  esac
+
+  # ── 안전성 (SAFE/HEAVY 소속 기반) ──
+  local safety safety_note
+  if is_in "$cat" "${HEAVY_CATS[@]}"; then
+    safety="caution"; safety_note="재설치/재다운로드 비용이 큼. 자주 안 쓰면 정리해도 됨."
+  else
+    safety="safe"; safety_note="순수 캐시라 소스·프로젝트엔 영향 없음."
+  fi
+
+  # ── 경로별 측정 + JSON 배열 조립 (없는 경로/권한오류 방어) ──
+  local paths_json="[" first=1 p kb ex rd disp needs_tcc="false"
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    if [ -e "$p" ]; then ex="true"; kb=$( (du -sk "$p" 2>/dev/null || echo 0) | awk '{print $1}' )
+    else ex="false"; kb=0; fi
+    kb=${kb:-0}
+    if [ -r "$p" ]; then rd="true"; else rd="false"; fi
+    case "$p" in
+      "$HOME/Library/Caches/"*|"$HOME/Library/Developer/"*|"$HOME/Library/Application Support/"*) needs_tcc="true" ;;
+    esac
+    disp=$(printf '%s' "$p" | sed "s|^${HOME}|~|")
+    [ "$first" -eq 0 ] && paths_json+=","
+    first=0
+    paths_json+=$(printf '{"path":"%s","size_kb":%s,"exists":%s,"readable":%s}' "$(json_escape "$disp")" "$kb" "$ex" "$rd")
+  done < <("do_$cat" paths 2>/dev/null)
+  paths_json+="]"
+
+  # ── 전체 용량 / heavy / fallback ──
+  local size_kb heavy fallback_json protected_f
+  size_kb=$("do_$cat" size 2>/dev/null); size_kb=${size_kb:-0}
+  if is_in "$cat" "${HEAVY_CATS[@]}"; then heavy="true"; else heavy="false"; fi
+  if is_protected "$cat"; then protected_f="true"; else protected_f="false"; fi
+  if [ "$fallback" = "null" ]; then fallback_json="null"; else fallback_json="\"$(json_escape "$fallback")\""; fi
+
+  printf '{"name":"%s","size_kb":%s,"kind":"%s","heavy":%s,"protected":%s,"safety":"%s","safety_note":"%s","regen_cost":"%s","regen_note":"%s","method":"%s","command":"%s","fallback":%s,"native_available":%s,"needs_tcc":%s,"extra":"%s","paths":%s}\n' \
+    "$cat" "$size_kb" "$(json_escape "$kind")" "$heavy" "$protected_f" \
+    "$safety" "$(json_escape "$safety_note")" \
+    "$regen_cost" "$(json_escape "$regen_note")" \
+    "$method" "$(json_escape "$command")" "$fallback_json" "$native_avail" "$needs_tcc" \
+    "$(json_escape "$extra")" "$paths_json"
+}
+
+cmd_clean() {
+  local apply=0 force=0 explicit=0 args=() targets=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --yes|-y) apply=1 ;;
+      --force|-f) force=1 ;;
+      *) args+=("$1") ;;
+    esac
+    shift
+  done
+  # 나이 필터(--older-than)는 전역에서 AGE_DAYS 로 파싱됨
+
+  # 대상 카테고리 결정
+  if [ "${#args[@]}" -eq 0 ] || is_in "all" "${args[@]:-}"; then
+    targets=("${SAFE_CATS[@]}")
+    is_in "all" "${args[@]:-}" && targets+=("${HEAVY_CATS[@]}")
+  else
+    explicit=1
+    for a in "${args[@]}"; do
+      if is_in "$a" "${SAFE_CATS[@]}" "${HEAVY_CATS[@]}"; then targets+=("$a")
+      else echo "${C_Y}경고: 알 수 없는 카테고리 '$a' (무시)${C_0}" >&2; fi
+    done
+  fi
+  [ "${#targets[@]}" -eq 0 ] && { echo "정리할 대상 없음."; return 0; }
+
+  # 보호 목록 필터: 자동(clean/all)은 조용히 제외, 명시 지정은 경고 후 차단(--force 우회)
+  if [ "${#PROTECTED[@]}" -gt 0 ]; then
+    local kept=() t
+    for t in "${targets[@]}"; do
+      if is_protected "$t"; then
+        if [ "$explicit" -eq 1 ] && [ "$force" -eq 1 ]; then kept+=("$t")
+        elif [ "$explicit" -eq 1 ]; then echo "${C_Y}보호됨: '$t' 는 보호 목록이라 건너뜀 (--force 로 우회)${C_0}" >&2; fi
+        # 자동(clean/all)이면 조용히 제외
+      else kept+=("$t"); fi
+    done
+    [ "${#kept[@]}" -eq 0 ] && { echo "정리할 대상 없음 (전부 보호됨)."; return 0; }
+    targets=("${kept[@]}")
+  fi
+
+  local c
+  if [ "$apply" -eq 0 ]; then
+    echo "${C_B}정리 미리보기${C_0} ${C_DIM}(dry-run — 실제 삭제 안 함)${C_0}"
+    [ -n "$AGE_DAYS" ] && echo "${C_DIM}나이 필터: ${AGE_DAYS}일보다 오래된 파일만 (docker 등 경로 없는 항목 제외)${C_0}"
+    echo "────────────────────────────────────────────"
+    local total=0 kb
+    for c in "${targets[@]}"; do "do_$c" dry; kb=$("do_$c" size); total=$((total + ${kb:-0})); done
+    echo "────────────────────────────────────────────"
+    printf "  %-16s ${C_B}%6s${C_0}\n" "추정 회수가능" "$(human "$total")"
+    echo
+    echo "${C_G}실제로 지우려면 --yes 추가:${C_0}  devsweep clean --yes ${args[*]:-}"
+  else
+    echo "${C_B}정리 실행${C_0}"
+    [ -n "$AGE_DAYS" ] && echo "${C_DIM}나이 필터: ${AGE_DAYS}일보다 오래된 파일만 (docker 등 제외)${C_0}"
+    local c p
+    for c in "${targets[@]}"; do
+      printf "  %-16s ... " "$c"
+      if [ -n "$AGE_DAYS" ]; then
+        if is_in "$c" "${NO_AGE_CATS[@]}"; then echo "${C_DIM}나이 필터 미지원(건너뜀)${C_0}"; continue; fi
+        # 나이 필터: 경로를 직접 mtime 기준 삭제 (wipe 가 AGE_DAYS 참조 → 네이티브 전체삭제 명령 우회)
+        while IFS= read -r p; do [ -n "$p" ] && wipe "$p"; done < <("do_$c" paths 2>/dev/null)
+        echo "${C_G}완료${C_0}"
+      else
+        "do_$c" clean && echo "${C_G}완료${C_0}" || echo "${C_Y}건너뜀${C_0}"
+      fi
+    done
+  fi
+}
+
+# ── 엔트리포인트 ─────────────────────────────────────────────
+# 전역 옵션: --older-than=Nd|Nw|N (모든 명령 공통 — scan/json/detail/clean 의 측정·정리에 적용)
+AGE_DAYS=""
+set_age() {
+  local v="$1" num; num="${v%[dw]}"
+  case "$num" in ''|*[!0-9]*) echo "${C_Y}--older-than 값 오류: '$v' (예: 30d, 2w)${C_0}" >&2; exit 1 ;; esac
+  case "$v" in *w) AGE_DAYS=$(( num * 7 )) ;; *) AGE_DAYS="$num" ;; esac
+}
+_args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --older-than)   shift; set_age "${1:-}" ;;
+    --older-than=*) set_age "${1#*=}" ;;
+    *) _args+=("$1") ;;
+  esac
+  shift
+done
+set -- "${_args[@]}"
+
+case "${1:-scan}" in
+  scan|"")     cmd_scan ;;
+  list|ls)     cmd_list ;;
+  --json|json) cmd_json ;;
+  detail)      shift; cmd_detail "${1:-}" ;;
+  clean|c)     shift; cmd_clean "$@" ;;
+  -h|--help|help) awk 'NR>=2 && /^set /{exit} NR>=2{sub(/^# ?/,""); print}' "$0" ;;
+  *) echo "알 수 없는 명령: $1  ('devsweep --help' 참고)" >&2; exit 1 ;;
+esac

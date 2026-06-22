@@ -1,0 +1,11 @@
+# 빌드 산출물 (build.sh 로 재생성)
+DevSweep.app/
+
+# macOS
+.DS_Store
+
+# OMC 상태
+.omc/
+
+# 작업 참고용 스크린샷
+sc2.png

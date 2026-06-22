@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="DevSweep app icon">
+  <defs>
+    <linearGradient id="base" x1="126" y1="98" x2="898" y2="926" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#202734"/>
+      <stop offset="0.48" stop-color="#111827"/>
+      <stop offset="1" stop-color="#07111d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="355" cy="213" r="650" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2dd4ff" stop-opacity="0.34"/>
+      <stop offset="0.42" stop-color="#38bdf8" stop-opacity="0.11"/>
+      <stop offset="1" stop-color="#38bdf8" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="broomHandle" x1="573" y1="191" x2="741" y2="614" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8d47a"/>
+      <stop offset="0.42" stop-color="#d99a32"/>
+      <stop offset="1" stop-color="#8d4b18"/>
+    </linearGradient>
+    <linearGradient id="broomBand" x1="399" y1="470" x2="580" y2="654" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#67e8f9"/>
+      <stop offset="1" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="bristles" x1="265" y1="565" x2="583" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7c762"/>
+      <stop offset="0.46" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#b45309"/>
+    </linearGradient>
+    <linearGradient id="cyanChip" x1="221" y1="307" x2="367" y2="458" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="amberChip" x1="652" y1="581" x2="800" y2="731" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fed7aa"/>
+      <stop offset="1" stop-color="#f97316"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="150%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="28" flood-color="#020617" flood-opacity="0.45"/>
+    </filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#020617" flood-opacity="0.32"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#base)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#glow)"/>
+  <path d="M132 735c162 91 397 116 681 72" fill="none" stroke="#67e8f9" stroke-opacity="0.18" stroke-width="38" stroke-linecap="round"/>
+  <path d="M165 696c166 78 370 92 606 46" fill="none" stroke="#22d3ee" stroke-opacity="0.48" stroke-width="15" stroke-linecap="round"/>
+  <path d="M210 654c153 57 326 63 518 18" fill="none" stroke="#a7f3d0" stroke-opacity="0.54" stroke-width="9" stroke-linecap="round"/>
+
+  <g filter="url(#lift)">
+    <path d="M677 168c19-8 41 0 50 18l8 17c8 18 1 39-17 48L516 347l-41-83 202-96z" fill="url(#broomHandle)"/>
+    <path d="M461 279l71-34 177 374-71 34z" fill="url(#broomHandle)"/>
+    <path d="M447 258l104-49 25 53-104 49z" fill="#fff7d6" opacity="0.45"/>
+    <path d="M399 495c41-24 91-33 140-23l44 91c-31 39-75 64-123 72l-79 13c-20 3-39-8-47-26l-17-35c-8-18-2-39 14-50l68-42z" fill="url(#broomBand)"/>
+    <path d="M317 575c96 55 181 75 266 60l-24 64c-21 54-68 93-125 101l-179 25c-28 4-52-22-43-49l49-151c8-24 33-37 56-50z" fill="url(#bristles)"/>
+    <path d="M279 641l-37 115m99-136l-35 153m99-159l-22 159m84-142l-6 120" fill="none" stroke="#7c2d12" stroke-opacity="0.34" stroke-width="9" stroke-linecap="round"/>
+    <path d="M318 579c76 45 154 66 233 64" fill="none" stroke="#fde68a" stroke-opacity="0.62" stroke-width="13" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <g transform="rotate(-11 286 386)">
+      <rect x="219" y="319" width="126" height="126" rx="27" fill="url(#cyanChip)"/>
+      <path d="M260 357l-24 25 24 25M304 357l24 25-24 25" fill="none" stroke="#e0f2fe" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="rotate(14 737 655)">
+      <rect x="675" y="594" width="123" height="123" rx="25" fill="url(#amberChip)"/>
+      <path d="M704 632h67M704 658h67M704 684h42" fill="none" stroke="#fff7ed" stroke-width="14" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(8 744 401)">
+      <ellipse cx="744" cy="373" rx="57" ry="22" fill="#34d399"/>
+      <path d="M687 373v82c0 13 26 25 57 25s57-12 57-25v-82" fill="#059669"/>
+      <ellipse cx="744" cy="455" rx="57" ry="25" fill="#10b981"/>
+      <path d="M710 384c23 9 47 9 70 0M710 421c23 9 47 9 70 0" fill="none" stroke="#a7f3d0" stroke-opacity="0.56" stroke-width="8" stroke-linecap="round"/>
+    </g>
+    <path d="M190 500l39-39 39 39-39 39z" fill="#38bdf8" opacity="0.82"/>
+    <path d="M819 500l30-30 30 30-30 30z" fill="#f59e0b" opacity="0.85"/>
+    <path d="M617 776l24-24 24 24-24 24z" fill="#5eead4" opacity="0.82"/>
+  </g>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M173 578c52 28 105 47 158 57" stroke="#67e8f9" stroke-opacity="0.65" stroke-width="12"/>
+    <path d="M160 618c42 20 86 35 133 44" stroke="#a7f3d0" stroke-opacity="0.58" stroke-width="8"/>
+    <path d="M207 541c33 15 68 27 104 35" stroke="#fef3c7" stroke-opacity="0.42" stroke-width="6"/>
+  </g>
+
+  <path d="M204 158h616c25 0 46 21 46 46v54" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="4"/>
+  <path d="M856 803c-18 36-47 58-86 66" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="5" stroke-linecap="round"/>
+</svg>

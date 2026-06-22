@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>DevSweep</string>
+    <key>CFBundleDisplayName</key>
+    <string>DevSweep</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.wyatt.devsweep</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleExecutable</key>
+    <string>DevSweep</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>ko</string>
+        <string>ja</string>
+        <string>zh-Hans</string>
+        <string>zh-Hant</string>
+        <string>th</string>
+        <string>vi</string>
+        <string>it</string>
+        <string>fr</string>
+        <string>es</string>
+        <string>pt</string>
+        <string>hr</string>
+    </array>
+</dict>
+</plist>
