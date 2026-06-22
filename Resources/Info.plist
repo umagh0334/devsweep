@@ -41,5 +41,7 @@
         <string>pt</string>
         <string>hr</string>
     </array>
+    <key>NSQuitAlwaysKeepsWindows</key>
+    <false/>
 </dict>
 </plist>

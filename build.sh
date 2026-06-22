@@ -40,5 +40,18 @@ done
 echo "  · ad-hoc 코드사이닝"
 codesign --force --sign - "$APP" >/dev/null 2>&1 || echo "    (사이닝 생략됨)"
 
+# 5) 릴리스용 zip (--zip / --release 플래그 시) — GitHub 릴리스 asset · 자체 업데이트 다운로드용.
+#    ditto 로 앱 번들 메타데이터/심볼릭링크/서명 보존 압축 (일반 zip 으론 깨질 수 있음).
+case " $* " in
+  *" --zip "*|*" --release "*)
+    VER=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo dev)
+    ZIP="$ROOT/DevSweep-$VER.app.zip"
+    echo "  · 릴리스 zip 생성 (v$VER)"
+    rm -f "$ROOT"/DevSweep-*.app.zip
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    echo "✓ zip: $ZIP ($(du -h "$ZIP" | awk '{print $1}' | tr -d ' '))"
+    ;;
+esac
+
 echo "✓ 완료: $APP"
 echo "  실행:  open '$APP'"

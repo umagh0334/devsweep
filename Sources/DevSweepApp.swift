@@ -19,6 +19,7 @@ struct DevSweepApp: App {
                 .environment(\.appLanguage, lang)
         }
         .windowResizability(.contentSize)
+        .defaultPosition(.center)
         .commands {
             // Settings scene 을 안 쓰므로 Cmd+, 를 직접 배선 (별도 창 열기)
             CommandGroup(replacing: .appSettings) { OpenSettingsButton() }

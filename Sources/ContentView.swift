@@ -9,10 +9,11 @@ struct ContentView: View {
     @AppStorage("autoScan") private var autoScan = true
     @AppStorage("olderThanDays") private var olderThanDays = 0
 
-    private var totalKB: Int { engine.categories.reduce(0) { $0 + $1.sizeKB } }
+    private var totalKB: Int { engine.categories.filter { !$0.protected }.reduce(0) { $0 + $1.sizeKB } }
     private var selectedKB: Int { engine.categories.filter(\.selected).reduce(0) { $0 + $1.sizeKB } }
     private var selectedCount: Int { engine.categories.filter(\.selected).count }
-    private var ranked: [CacheCategory] { engine.categories.filter(\.hasSize).sorted { $0.sizeKB > $1.sizeKB } }
+    /// 정리 가능(용량 있음 + 보호 안 됨), 용량 내림차순 — 분포 바·색·자동선택의 기준
+    private var ranked: [CacheCategory] { engine.categories.filter { $0.hasSize && !$0.protected }.sorted { $0.sizeKB > $1.sizeKB } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +29,12 @@ struct ContentView: View {
         }
         .frame(width: 900, height: 620)
         .tint(Theme.sweep)
+        .onAppear {
+            // 매 실행 화면 중앙 (복원된 위치를 덮어씀). .background(NSView)는 윈도우 생성을 깨므로 onAppear 사용.
+            DispatchQueue.main.async {
+                NSApp.windows.first(where: { $0.isVisible })?.center()
+            }
+        }
         .task { if autoScan { await engine.scan() } }
         .task(id: engine.categories.count) {
             if selectedDetail == nil { selectedDetail = ranked.first?.name }
@@ -108,13 +115,21 @@ struct ContentView: View {
     // ── 마스터: 카테고리 리스트 (용량 있는 것 + 캐시 없음 섹션) ──
     private var masterList: some View {
         let active = ranked
-        let empty = engine.categories.filter { !$0.hasSize }
+        let protectedItems = engine.categories.filter(\.protected)
+        let empty = engine.categories.filter { !$0.hasSize && !$0.protected }
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 3) {
+                    if active.isEmpty && olderThanDays > 0 && !engine.categories.isEmpty {
+                        filterEmptyBanner
+                    }
                     ForEach(active) { row($0) }
+                    if !protectedItems.isEmpty {
+                        groupHeader(tr("badge.protected", lang), protectedItems.count, icon: "lock.fill")
+                        ForEach(protectedItems) { row($0) }
+                    }
                     if !empty.isEmpty {
-                        emptyHeader(empty.count)
+                        groupHeader(tr("master.empty", lang), empty.count)
                         ForEach(empty) { row($0) }
                     }
                 }
@@ -134,14 +149,38 @@ struct ContentView: View {
             .id(cat.name)
     }
 
-    private func emptyHeader(_ n: Int) -> some View {
+    private func groupHeader(_ title: String, _ n: Int, icon: String? = nil) -> some View {
         HStack(spacing: 7) {
-            Text(tr("master.empty", lang)).font(.system(size: 10, weight: .semibold, design: .rounded))
+            if let icon { Image(systemName: icon).font(.system(size: 9)).foregroundStyle(Theme.guardTone) }
+            Text(title).font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(.tertiary).textCase(.uppercase).tracking(0.5)
             Text("\(n)").font(.system(size: 10, design: .rounded)).foregroundStyle(.tertiary)
             Divider()
         }
         .padding(.horizontal, 9).padding(.top, 13).padding(.bottom, 3)
+    }
+
+    /// 나이 필터로 정리 가능 항목이 전부 비었을 때 안내 + 끄기 버튼
+    private var filterEmptyBanner: some View {
+        VStack(spacing: 9) {
+            Icons.view("clock", size: 26).foregroundStyle(Theme.sweep)
+            Text(tr("filter.emptyTitleFmt", lang, olderThanDays))
+                .font(.system(.callout, design: .rounded).weight(.semibold))
+            Text(tr("filter.emptyDesc", lang))
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            Button {
+                olderThanDays = 0
+                Task { await engine.scan() }
+            } label: {
+                Text(tr("filter.turnOff", lang))
+            }
+            .controlSize(.small).buttonStyle(.borderedProminent).padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22).padding(.horizontal, 14)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.sweep.opacity(0.06)))
+        .padding(.bottom, 4)
     }
 
     // ── 디테일: 선택된 카테고리 상세 패널 ──
@@ -241,6 +280,7 @@ struct MasterRow: View {
     let isActive: Bool
     let onSelect: () -> Void
     @Environment(\.appLanguage) private var lang
+    @AppStorage("olderThanDays") private var olderThanDays = 0
 
     private var accent: Color {
         if cat.protected { return Theme.guardTone }
@@ -255,7 +295,8 @@ struct MasterRow: View {
                 .labelsHidden().toggleStyle(.checkbox)
                 .disabled(cat.protected || !cat.hasSize)
                 .help(cat.protected ? tr("master.tipProtected", lang)
-                      : (!cat.hasSize ? tr("master.tipNoCache", lang) : tr("master.tipSelect", lang)))
+                      : (!cat.hasSize ? (olderThanDays > 0 ? tr("master.tipFiltered", lang) : tr("master.tipNoCache", lang))
+                                      : tr("master.tipSelect", lang)))
             Icons.view(cat.iconName, size: 16)
                 .foregroundStyle(cat.protected ? AnyShapeStyle(Theme.guardTone) : AnyShapeStyle(accent))
                 .frame(width: 30, height: 30)

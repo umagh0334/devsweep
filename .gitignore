@@ -1,5 +1,6 @@
 # 빌드 산출물 (build.sh 로 재생성)
 DevSweep.app/
+DevSweep-*.app.zip
 
 # macOS
 .DS_Store

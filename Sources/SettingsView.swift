@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// 환경설정 — macOS 시스템설정 스타일. 좌측 섹션 사이드바 + 우측 Form(레이블 좌 / 컨트롤 우).
 /// "Sweep Console" 토큰(Theme) + 다국어(tr) 적용.
@@ -16,6 +17,12 @@ struct SettingsView: View {
         }
         .frame(width: 680, height: 480)
         .tint(Theme.sweep)
+        .onAppear {
+            // 설정창도 매번 화면 중앙 (메인과 동일 — 복원 위치를 덮어씀). title 로 설정창만 골라냄.
+            DispatchQueue.main.async {
+                NSApp.windows.first(where: { $0.title == "DevSweep 설정" })?.center()
+            }
+        }
     }
 
     private var sidebar: some View {
@@ -46,45 +53,35 @@ struct SettingsView: View {
     @ViewBuilder
     private var detail: some View {
         switch section {
-        case .general:  GeneralSettings(engine: engine)
-        case .protect:  ProtectSettings(engine: engine)
-        case .age:      AgeSettings(engine: engine)
-        case .schedule: comingSoon("calendar", tr("set.schedule", lang), tr("coming.scheduleDesc", lang))
-        case .about:    AboutSettings()
+        case .general:   GeneralSettings(engine: engine)
+        case .protect:   ProtectSettings(engine: engine)
+        case .advanced:  AdvancedSettings(engine: engine)
+        case .developer: DeveloperSettings(engine: engine)
+        case .about:     AboutSettings()
         }
-    }
-
-    private func comingSoon(_ icon: String, _ title: String, _ desc: String) -> some View {
-        ContentUnavailableView {
-            Label { Text(title).font(.system(.title3, design: .rounded)) }
-            icon: { Icons.view(icon, size: 34).foregroundStyle(.secondary) }
-        } description: {
-            Text(desc)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)   // detail 의 topLeading 무시하고 중앙 배치
     }
 }
 
 /// 좌측 사이드바 섹션 (Solar 아이콘).
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, protect, age, schedule, about
+    case general, protect, advanced, developer, about
     var id: String { rawValue }
     var titleKey: String {
         switch self {
-        case .general:  return "set.general"
-        case .protect:  return "set.protect"
-        case .age:      return "set.age"
-        case .schedule: return "set.schedule"
-        case .about:    return "set.about"
+        case .general:   return "set.general"
+        case .protect:   return "set.protect"
+        case .advanced:  return "set.advanced"
+        case .developer: return "set.developer"
+        case .about:     return "set.about"
         }
     }
     var icon: String {
         switch self {
-        case .general:  return "settings"
-        case .protect:  return "shield"
-        case .age:      return "clock"
-        case .schedule: return "calendar"
-        case .about:    return "info"
+        case .general:   return "settings"
+        case .protect:   return "shield"
+        case .advanced:  return "tuning"
+        case .developer: return "user"
+        case .about:     return "info"
         }
     }
 }
@@ -135,13 +132,15 @@ struct GeneralSettings: View {
 }
 
 /// 나이 필터 — 선택 기간보다 오래된 파일만 정리. 변경 시 재스캔(용량 갱신).
-struct AgeSettings: View {
+/// 고급 설정 — 나이 필터 + 자동 정리(준비 중)를 한 화면에 묶음.
+struct AdvancedSettings: View {
     let engine: Engine
     @Environment(\.appLanguage) private var lang
     @AppStorage("olderThanDays") private var olderThanDays = 0
 
     var body: some View {
         Form {
+            // 나이 필터
             Section {
                 LabeledContent(tr("age.label", lang)) {
                     Picker("", selection: $olderThanDays) {
@@ -154,8 +153,18 @@ struct AgeSettings: View {
                     .labelsHidden().fixedSize()
                     .onChange(of: olderThanDays) { _, _ in Task { await engine.scan() } }
                 }
+            } header: {
+                Text(tr("set.age", lang))
             } footer: {
                 Text(tr("age.note", lang)).fixedSize(horizontal: false, vertical: true)
+            }
+            // 자동 정리 (준비 중)
+            Section {
+                LabeledContent(tr("set.schedule", lang)) {
+                    Text(tr("adv.soon", lang)).foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text(tr("coming.scheduleDesc", lang)).fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
@@ -209,6 +218,97 @@ struct ProtectSettings: View {
                 Text(tr(kindKey(cat.kind), lang)).font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// 개발자 — 캐시 분포로 추정한 개발 성향 (재미).
+struct DeveloperSettings: View {
+    let engine: Engine
+    @Environment(\.appLanguage) private var lang
+    @AppStorage("totalReclaimedKB") private var totalReclaimedKB = 0
+
+    var body: some View {
+        let slices = DevProfile.breakdown(engine.categories)
+        let badges = DevProfile.badges(engine.categories, reclaimedKB: totalReclaimedKB, lang: lang)
+        return Form {
+            Section { profileCard }
+            if !slices.isEmpty {
+                Section { breakdownView(slices) } header: { Text(tr("dev.breakdown", lang)) }
+            }
+            if !badges.isEmpty {
+                Section { badgesView(badges) } header: { Text(tr("dev.badges", lang)) }
+            }
+        }
+        .formStyle(.grouped)
+        .task { if engine.categories.isEmpty { await engine.scan() } }
+    }
+
+    /// 캐시 분포로 추정한 개발 성향 카드
+    private var profileCard: some View {
+        let p = DevProfile.analyze(engine.categories, lang: lang)
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 11) {
+                Text(p.emoji).font(.system(size: 32))
+                Text(p.title).font(.system(.title3, design: .rounded).weight(.bold))
+                Spacer()
+            }
+            Text(p.summary).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// 생태계별 용량 도넛 차트 + 범례 (메인 분포 바와 같은 팔레트)
+    private func breakdownView(_ slices: [DevProfile.EcoSlice]) -> some View {
+        let total = max(1, slices.reduce(0) { $0 + $1.sizeKB })
+        // 누적 비율로 각 섹터의 시작·끝(0~1)을 미리 계산
+        var acc = 0.0
+        let arcs = slices.enumerated().map { i, s -> (idx: Int, slice: DevProfile.EcoSlice, from: Double, to: Double) in
+            let from = acc
+            acc += Double(s.sizeKB) / Double(total)
+            return (i, s, from, acc)
+        }
+        return HStack(alignment: .center, spacing: 22) {
+            ZStack {
+                ForEach(arcs, id: \.slice.id) { a in
+                    Circle()
+                        .trim(from: a.from, to: a.to)
+                        .stroke(Theme.segment(a.idx), style: StrokeStyle(lineWidth: 20, lineCap: .butt))
+                        .rotationEffect(.degrees(-90))   // 12시 방향에서 시작
+                }
+                Text(humanKB(total)).font(.system(.callout, design: .rounded).weight(.bold))
+            }
+            .frame(width: 122, height: 122)
+            .padding(.leading, 4)
+
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(arcs, id: \.slice.id) { a in
+                    HStack(spacing: 8) {
+                        Circle().fill(Theme.segment(a.idx)).frame(width: 9, height: 9)
+                        Text(a.slice.name).font(.caption)
+                        Spacer(minLength: 12)
+                        Text(humanKB(a.slice.sizeKB)).font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    /// 획득 배지 칩 (반응형 그리드)
+    private func badgesView(_ badges: [DevProfile.Badge]) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], alignment: .leading, spacing: 7) {
+            ForEach(badges) { b in
+                HStack(spacing: 5) {
+                    Text(b.emoji).font(.callout)
+                    Text(b.title).font(.caption).fontWeight(.medium)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Capsule().fill(Theme.sweep.opacity(0.12)))
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
