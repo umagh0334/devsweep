@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct DevSweepApp: App {
@@ -16,18 +17,25 @@ struct DevSweepApp: App {
     @AppStorage("autoCleanDay") private var autoCleanDay = 1         // 매월: 1~28일
     @AppStorage("olderThanDays") private var olderThanDays = 0
 
-    private var scheme: ColorScheme? {
-        switch appearance { case 1: return .light; case 2: return .dark; default: return nil }
+    /// 외관을 NSApp.appearance 로 직접 적용. SwiftUI .preferredColorScheme(nil) 은 다크→시스템
+    /// 전환 시 윈도우 appearance 가 리셋되지 않아 라이트/다크가 섞이는 버그가 있어 AppKit 으로 명시 제어.
+    private func applyAppearance() {
+        switch appearance {
+        case 1: NSApp.appearance = NSAppearance(named: .aqua)
+        case 2: NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp.appearance = nil   // 시스템 따름 (잔상 없이 리셋)
+        }
     }
     private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .systemDefault }
 
     var body: some Scene {
         WindowGroup("DevSweep") {
             ContentView(engine: engine)
-                .preferredColorScheme(scheme)
                 .environment(\.appLanguage, lang)
+                .onChange(of: appearance) { _, _ in applyAppearance() }
                 .task {
-                    // 콜드 런치 시 1회(.onChange 는 초기값엔 미발동) — 자동 정리 결과 합산 + 상태 self-heal
+                    // 콜드 런치 시 1회(.onChange 는 초기값엔 미발동) — 외관 적용 + 자동 정리 합산 + self-heal
+                    applyAppearance()
                     AutoClean.reconcile()
                     AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, hour: autoCleanHour, minute: autoCleanMinute, weekday: autoCleanWeekday, day: autoCleanDay, olderThanDays: olderThanDays)
                 }
@@ -48,7 +56,6 @@ struct DevSweepApp: App {
         // 별도 설정 창 — 화면 중앙에 띄움(우측 갑툭튀 방지), 시스템설정 스타일
         Window("DevSweep 설정", id: "settings") {
             SettingsView(engine: engine)
-                .preferredColorScheme(scheme)
                 .environment(\.appLanguage, lang)
         }
         .defaultPosition(.center)
