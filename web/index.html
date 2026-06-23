@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DevSweep — reclaim the disk your build tools forgot about</title>
+<meta name="description" content="DevSweep maps the build caches hoarding your macOS SSD, flags what's safe to delete, and sweeps them back. Whitelist-only, dry-run by default.">
+<style>
+  :root{
+    /* cool ink + teal system + multi-hue cache map */
+    --bg:#eef3f1;
+    --bg-tint:#e4ecea;
+    --surface:#ffffff;
+    --ink-900:#0b1615;
+    --ink-800:#10201e;
+    --line:#d9e4e0;
+    --line-strong:#c4d3ce;
+    --text:#0e1a18;
+    --muted:#5c6f6a;
+    --faint:#8497921a;
+
+    --teal:#11b1a1;   /* sweep — primary */
+    --blue:#337aeb;   /* heavy attribute */
+    --red:#e3524d;    /* caution / risk */
+    --slate:#8f97a8;  /* protected / neutral */
+
+    /* disk map palette (mirrors the app's distribution bar) */
+    --c1:#11b1a1; --c2:#337aeb; --c3:#8c76eb; --c4:#db6ba9;
+    --c5:#efa64a; --c6:#57bd7e; --c7:#6cb1d8; --c8:#c8875c;
+
+    --font-display:ui-rounded,"SF Pro Rounded","Segoe UI Rounded",system-ui,sans-serif;
+    --font-body:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+
+    --r:16px; --r-lg:22px;
+    --maxw:1080px;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:var(--font-body);
+    background:var(--bg);
+    color:var(--text);
+    line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  ::selection{background:var(--teal);color:#fff}
+
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+  .display{font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;line-height:1.05}
+
+  /* ── nav ── */
+  nav{
+    position:sticky;top:0;z-index:50;
+    backdrop-filter:saturate(1.4) blur(14px);
+    background:rgba(238,243,241,.72);
+    border-bottom:1px solid var(--line);
+  }
+  .nav-inner{display:flex;align-items:center;justify-content:space-between;height:62px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:700;font-size:1.12rem;letter-spacing:-.01em}
+  .brand .logo{width:30px;height:30px;display:grid;place-items:center;background:var(--teal);border-radius:9px;color:#fff;box-shadow:0 4px 14px -4px var(--teal)}
+  .brand svg{width:18px;height:18px}
+  .nav-links{display:flex;align-items:center;gap:26px;font-size:.92rem;color:var(--muted)}
+  .nav-links a:hover{color:var(--text)}
+  .nav-cta{
+    font-family:var(--font-display);font-weight:600;font-size:.9rem;
+    color:#fff;background:var(--ink-900);padding:9px 16px;border-radius:10px;
+    transition:transform .15s ease, background .15s ease;
+  }
+  .nav-cta:hover{transform:translateY(-1px);background:#000}
+  .lang-sel{font-family:var(--font-mono);font-size:.82rem;color:var(--muted);background:var(--surface);
+    border:1px solid var(--line);border-radius:9px;padding:6px 9px;cursor:pointer;transition:border-color .15s ease,color .15s ease}
+  .lang-sel:hover{border-color:var(--line-strong);color:var(--text)}
+  @media(max-width:680px){.nav-links a:not(.nav-cta){display:none}}
+
+  /* ── hero ── */
+  .hero{padding:clamp(54px,9vw,104px) 0 clamp(40px,6vw,66px);position:relative}
+  .hero::before{
+    content:"";position:absolute;inset:0;z-index:-1;
+    background:
+      radial-gradient(60% 50% at 78% 8%, rgba(17,177,161,.14), transparent 70%),
+      radial-gradient(50% 40% at 12% 4%, rgba(51,122,235,.10), transparent 70%);
+  }
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;
+    font-family:var(--font-mono);font-size:.78rem;letter-spacing:.04em;
+    color:var(--muted);background:var(--surface);
+    border:1px solid var(--line);padding:6px 12px;border-radius:999px;margin-bottom:22px;
+  }
+  .eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 3px rgba(17,177,161,.18)}
+  h1.hero-title{font-family:var(--font-display);font-weight:700;letter-spacing:-.025em;line-height:1.02;
+    font-size:clamp(2.5rem,6.4vw,4.7rem);max-width:14ch}
+  h1.hero-title .accent{color:var(--teal)}
+  .hero-sub{font-size:clamp(1.05rem,1.8vw,1.28rem);color:var(--muted);max-width:46ch;margin-top:22px}
+  .hero-sub b{color:var(--text);font-weight:600}
+
+  /* ── signature: disk cache map ── */
+  .map-card{
+    margin-top:clamp(34px,5vw,52px);
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:var(--r-lg);
+    padding:clamp(20px,3vw,30px);
+    box-shadow:0 30px 60px -38px rgba(11,22,21,.5), 0 2px 0 var(--line) inset;
+  }
+  .map-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:18px}
+  .map-label{font-family:var(--font-mono);font-size:.74rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .map-total{display:flex;align-items:baseline;gap:10px;margin-top:4px}
+  .map-total .num{font-family:var(--font-display);font-weight:700;font-size:clamp(2.6rem,5.5vw,3.6rem);letter-spacing:-.02em;line-height:1}
+  .map-total .unit{font-family:var(--font-display);font-weight:700;font-size:clamp(1.4rem,3vw,2rem);color:var(--teal)}
+  .map-total .cap{font-size:.92rem;color:var(--muted);font-family:var(--font-mono)}
+  .map-of{text-align:right;font-family:var(--font-mono);font-size:.8rem;color:var(--muted);line-height:1.4}
+  .map-of b{color:var(--text);font-size:1.05rem}
+
+  .map-bar{display:flex;gap:3px;height:54px;border-radius:11px;overflow:hidden;background:var(--bg-tint)}
+  .seg{position:relative;height:100%;width:0;border-radius:5px;cursor:default;
+    transition:width 1.05s cubic-bezier(.22,1,.36,1), filter .15s ease, transform .15s ease;}
+  .seg:hover{filter:brightness(1.08) saturate(1.1);transform:translateY(-2px)}
+  .seg .tip{
+    position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%) translateY(4px);
+    background:var(--ink-900);color:#fff;font-family:var(--font-mono);font-size:.72rem;white-space:nowrap;
+    padding:6px 9px;border-radius:7px;opacity:0;pointer-events:none;transition:opacity .14s ease, transform .14s ease;z-index:5;
+  }
+  .seg .tip::after{content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--ink-900)}
+  .seg:hover .tip{opacity:1;transform:translateX(-50%) translateY(0)}
+  .map-legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:18px}
+  .lg{display:flex;align-items:center;gap:7px;font-size:.82rem;color:var(--muted)}
+  .lg .sw{width:9px;height:9px;border-radius:3px}
+  .lg .sz{font-family:var(--font-mono);color:var(--text);font-size:.78rem}
+
+  /* ── CTA row ── */
+  .cta-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:clamp(30px,4vw,40px)}
+  .btn{display:inline-flex;align-items:center;gap:9px;font-family:var(--font-display);font-weight:600;font-size:1rem;
+    padding:14px 22px;border-radius:13px;transition:transform .15s ease, box-shadow .15s ease, background .15s ease;cursor:pointer;border:1px solid transparent}
+  .btn-primary{background:var(--ink-900);color:#fff;box-shadow:0 12px 28px -12px rgba(11,22,21,.7)}
+  .btn-primary:hover{transform:translateY(-2px);box-shadow:0 18px 34px -12px rgba(11,22,21,.75);background:#000}
+  .btn-primary svg{width:18px;height:18px}
+  .btn-ghost{background:transparent;border-color:var(--line-strong);color:var(--text)}
+  .btn-ghost:hover{background:var(--surface);transform:translateY(-2px)}
+  .meta{font-family:var(--font-mono);font-size:.82rem;color:var(--muted);margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .meta .sep{opacity:.4}
+
+  /* ── section scaffolding ── */
+  section.block{padding:clamp(64px,9vw,108px) 0}
+  .kicker{font-family:var(--font-mono);font-size:.78rem;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);margin-bottom:14px}
+  h2.head{font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;font-size:clamp(1.8rem,3.6vw,2.7rem);line-height:1.08;max-width:18ch}
+  .lead{color:var(--muted);font-size:clamp(1rem,1.5vw,1.15rem);max-width:54ch;margin-top:16px}
+
+  /* ── trust / 3 principles ── */
+  .trust-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:46px}
+  @media(max-width:760px){.trust-grid{grid-template-columns:1fr}}
+  .trust{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:26px 24px;position:relative;overflow:hidden}
+  .trust::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--teal)}
+  .trust .ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:rgba(17,177,161,.12);color:var(--teal);margin-bottom:16px}
+  .trust .ic svg{width:20px;height:20px}
+  .trust h3{font-family:var(--font-display);font-weight:700;font-size:1.18rem;letter-spacing:-.01em}
+  .trust p{color:var(--muted);font-size:.94rem;margin-top:8px}
+  .trust code{font-family:var(--font-mono);font-size:.86em;background:var(--bg-tint);padding:1px 6px;border-radius:5px;color:var(--text)}
+
+  /* ── terminal demo (dark contrast band) ── */
+  .demo-band{background:var(--ink-900);color:#cfe0dc}
+  .demo-band .kicker{color:#5fd9c9}
+  .demo-band h2.head{color:#fff}
+  .demo-band .lead{color:#9fb4af}
+  .term{
+    margin-top:42px;background:#0a1413;border:1px solid #1c302d;border-radius:var(--r);
+    font-family:var(--font-mono);font-size:clamp(.78rem,1.5vw,.92rem);line-height:1.7;overflow:hidden;
+    box-shadow:0 40px 80px -40px rgba(0,0,0,.7);
+  }
+  .term-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #1c302d;background:#0d1817}
+  .term-bar .d{width:11px;height:11px;border-radius:50%}
+  .term-bar .t{margin-left:10px;color:#5b716c;font-size:.78rem}
+  .term-body{padding:20px clamp(16px,3vw,26px);white-space:pre;overflow-x:auto}
+  .term-body .pr{color:#5fd9c9}
+  .term-body .dim{color:#5b716c}
+  .term-body .nm{color:#cfe0dc}
+  .term-body .gr{color:#5fd9c9}
+  .term-body .am{color:#8fb4ec}
+  .term-body .rd{color:#ec7e7a}
+  .term-body .hl{color:#fff;font-weight:600}
+
+  /* ── features ── */
+  .feat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:46px}
+  @media(max-width:860px){.feat-grid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:560px){.feat-grid{grid-template-columns:1fr}}
+  .feat{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:24px 22px;transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease}
+  .feat:hover{transform:translateY(-3px);box-shadow:0 22px 40px -28px rgba(11,22,21,.4);border-color:var(--line-strong)}
+  .feat .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;margin-bottom:15px}
+  .feat .ic svg{width:19px;height:19px}
+  .feat h3{font-family:var(--font-display);font-weight:700;font-size:1.06rem}
+  .feat p{color:var(--muted);font-size:.9rem;margin-top:6px}
+
+  /* risk badges sample */
+  .badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}
+  .bdg{font-family:var(--font-mono);font-size:.7rem;font-weight:600;padding:3px 8px;border-radius:999px;display:inline-flex;align-items:center;gap:4px}
+  .bdg.safe{color:var(--teal);background:rgba(17,177,161,.13)}
+  .bdg.neutral{color:var(--slate);background:rgba(143,151,168,.15)}
+  .bdg.caution{color:var(--red);background:rgba(227,82,77,.13)}
+  .bdg.heavy{color:var(--blue);background:rgba(51,122,235,.12)}
+
+  /* ── categories ── */
+  .cats{display:flex;flex-wrap:wrap;gap:9px;margin-top:40px}
+  .cat{font-family:var(--font-mono);font-size:.84rem;padding:7px 13px;border-radius:9px;background:var(--surface);
+    border:1px solid var(--line);color:var(--text);display:inline-flex;align-items:center;gap:7px;transition:border-color .15s ease, transform .15s ease}
+  .cat:hover{transform:translateY(-2px);border-color:var(--line-strong)}
+  .cat .d{width:7px;height:7px;border-radius:50%}
+  .cat.h{border-style:dashed}
+  .cat-note{margin-top:18px;font-size:.86rem;color:var(--muted);font-family:var(--font-mono)}
+  .cat-note .hd{display:inline-block;width:8px;height:8px;border:1px dashed var(--slate);border-radius:50%;vertical-align:middle;margin-right:5px}
+
+  /* ── download band ── */
+  .dl-band{background:linear-gradient(160deg,var(--ink-900),#0f211f)}
+  .dl-inner{text-align:center;color:#fff;padding:clamp(60px,8vw,96px) 0}
+  .dl-inner h2{font-family:var(--font-display);font-weight:700;letter-spacing:-.02em;font-size:clamp(2rem,4.4vw,3.2rem);line-height:1.05}
+  .dl-inner h2 .accent{color:#5fd9c9}
+  .dl-inner p{color:#9fb4af;margin:18px auto 0;max-width:46ch;font-size:1.05rem}
+  .dl-cta{display:flex;justify-content:center;gap:14px;flex-wrap:wrap;margin-top:34px}
+  .btn-teal{background:var(--teal);color:#04201d;box-shadow:0 16px 36px -14px rgba(17,177,161,.7)}
+  .btn-teal:hover{transform:translateY(-2px);background:#15c4b2}
+  .btn-line{background:transparent;border-color:#27413d;color:#cfe0dc}
+  .btn-line:hover{background:#13211f;transform:translateY(-2px)}
+  .dl-fine{font-family:var(--font-mono);font-size:.8rem;color:#7d938e;margin-top:22px}
+
+  /* ── footer ── */
+  footer{background:var(--ink-900);color:#7d938e;border-top:1px solid #1c302d;padding:40px 0}
+  .foot-inner{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap;font-size:.86rem}
+  .foot-inner .brand{color:#cfe0dc;font-size:1rem}
+  .foot-inner .logo{background:#13211f;color:#5fd9c9;box-shadow:none}
+  .foot-links{display:flex;gap:22px;font-family:var(--font-mono);font-size:.82rem}
+  .foot-links a:hover{color:#cfe0dc}
+
+  .reveal{opacity:0;transform:translateY(18px);transition:opacity .7s ease, transform .7s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  @media(prefers-reduced-motion:reduce){
+    *{transition:none!important;animation:none!important;scroll-behavior:auto}
+    .reveal{opacity:1;transform:none}
+  }
+  :focus-visible{outline:2.5px solid var(--teal);outline-offset:3px;border-radius:6px}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="DevSweep home">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15.5 3.5 10.5 8.5"/><path d="M8 7 12.5 11.5"/>
+          <path d="M5.2 13.4c2-2 5.4-2 7.6 0l-2.6 6c-1.4 .7-3.4 .7-4.8 0z"/>
+          <path d="M7.6 13.6 7 19.4M9.9 13.3 9.7 19.9M12 13.9 12.4 19.2"/>
+        </svg>
+      </span>
+      DevSweep
+    </a>
+    <div class="nav-links">
+      <a href="#how" data-i18n="navHow">How it works</a>
+      <a href="#features" data-i18n="navFeat">Features</a>
+      <a href="#caches" data-i18n="navCaches">Caches</a>
+      <select id="lang" class="lang-sel" aria-label="Language"></select>
+      <a class="nav-cta" href="#download" data-i18n="navDownload">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <span class="eyebrow" data-i18n="eyebrow"><span class="dot"></span> macOS · 31 cache categories · open source</span>
+    <h1 class="hero-title" data-i18n="heroTitle">Your build caches are <span class="accent">hoarding gigabytes.</span></h1>
+    <p class="hero-sub" data-i18n="heroSub">Every <b>gradle</b> build, <b>Docker</b> pull, and <b>npm install</b> leaves caches behind. DevSweep maps them, flags what's safe, and sweeps them back — no guesswork.</p>
+
+    <!-- SIGNATURE: live disk cache map -->
+    <div class="map-card reveal" id="map">
+      <div class="map-head">
+        <div>
+          <div class="map-label" data-i18n="mapLabel">Reclaimable on this Mac</div>
+          <div class="map-total">
+            <span class="num mono" id="count">0.0</span><span class="unit">GB</span>
+            <span class="cap" data-i18n="mapCap">across 14 caches</span>
+          </div>
+        </div>
+        <div class="map-of" data-i18n="mapOf">scanned in <b>1.2s</b><br>nothing deleted yet</div>
+      </div>
+      <div class="map-bar" id="bar" role="img" aria-label="Disk cache map showing 12.4 gigabytes of reclaimable build caches by tool"></div>
+      <div class="map-legend" id="legend"></div>
+    </div>
+
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#download">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3v11m0 0 4-4m-4 4-4-4M5 19h14"/></svg>
+        <span data-i18n="ctaDl">Download for macOS</span>
+      </a>
+      <a class="btn btn-ghost" href="https://github.com/umagh0334/devsweep" target="_blank" rel="noopener" data-i18n="ctaGh">View on GitHub</a>
+    </div>
+    <div class="meta" data-i18n="heroMeta">macOS 14+ <span class="sep">·</span> Apple Silicon <span class="sep">·</span> Free &amp; open source <span class="sep">·</span> no telemetry</div>
+  </div>
+</header>
+
+<!-- TRUST: why it's safe to point at your disk -->
+<section class="block" id="how">
+  <div class="wrap">
+    <div class="kicker reveal" data-i18n="trustKicker">Safe by construction</div>
+    <h2 class="head reveal" data-i18n="trustHead">A delete tool you can actually trust pointing at your home folder.</h2>
+    <p class="lead reveal" data-i18n="trustLead">DevSweep never guesses. It only touches paths it explicitly knows are caches, and it shows you everything before a single byte moves.</p>
+    <div class="trust-grid">
+      <div class="trust reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12.5l2 2 4-4.5"/><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/></svg></div>
+        <h3 data-i18n="t1h">Whitelist-only</h3>
+        <p data-i18n="t1b">Every path and command is explicitly listed. Anything DevSweep doesn't recognize, it leaves untouched — your source and projects are never in scope.</p>
+      </div>
+      <div class="trust reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg></div>
+        <h3 data-i18n="t2h">Dry-run by default</h3>
+        <p data-i18n="t2b">Run it and you see exactly what would be freed. Deletion only happens when you confirm with <code>--yes</code> — or one click in the app.</p>
+      </div>
+      <div class="trust reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M4 12h16M4 17h10"/><path d="M18 15l2 2 3-3.5" transform="translate(-2 1)"/></svg></div>
+        <h3 data-i18n="t3h">Native cleanup first</h3>
+        <p data-i18n="t3b">Where a tool has its own cleaner — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep runs that, and only falls back to <code>rm</code> when there's none.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TERMINAL DEMO -->
+<section class="block demo-band">
+  <div class="wrap">
+    <div class="kicker reveal" data-i18n="demoKicker">The engine</div>
+    <h2 class="head reveal" data-i18n="demoHead">A bash core you can read in one sitting.</h2>
+    <p class="lead reveal" data-i18n="demoLead">The GUI is a thin shell over a transparent CLI. Same scan, same safety, scriptable in CI — and the app speaks 12 languages on top.</p>
+    <div class="term reveal">
+      <div class="term-bar">
+        <span class="d" style="background:#ec6a5e"></span><span class="d" style="background:#f4bf4f"></span><span class="d" style="background:#61c554"></span>
+        <span class="t mono">devsweep — ~/dev</span>
+      </div>
+      <div class="term-body"><span class="pr">$</span> devsweep
+<span class="dim">Dev cache overview            (nothing deleted)</span>
+<span class="dim">────────────────────────────────────────────</span>
+  <span class="nm">gradle</span>             <span class="hl">3.4G</span>  <span class="gr">regenerated</span>
+  <span class="nm">docker</span>             <span class="hl">2.1G</span>  <span class="am">prune</span>
+  <span class="nm">Xcode DerivedData</span>  <span class="hl">1.8G</span>  <span class="gr">regenerated</span>
+  <span class="nm">npm</span>                <span class="hl">1.2G</span>  <span class="gr">re-downloaded</span>
+  <span class="nm">cargo</span>              <span class="hl">980M</span>  <span class="gr">re-downloaded</span>
+  <span class="dim">…  +9 more</span>
+<span class="dim">────────────────────────────────────────────</span>
+  <span class="nm">reclaimable</span>       <span class="hl">12.4G</span>  <span class="dim">(docker/rustup excluded)</span>
+
+<span class="pr">$</span> devsweep clean --yes
+  <span class="nm">gradle</span>   … <span class="gr">done</span>
+  <span class="nm">npm</span>      … <span class="gr">done</span>
+  <span class="hl">✓ 12.4G reclaimed</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="block" id="features">
+  <div class="wrap">
+    <div class="kicker reveal" data-i18n="featKicker">Built for daily use</div>
+    <h2 class="head reveal" data-i18n="featHead">More than a delete button.</h2>
+    <p class="lead reveal" data-i18n="featLead">Everything you'd want before, during, and after a sweep — so cleanup becomes something you set once and stop thinking about.</p>
+    <div class="feat-grid">
+      <div class="feat reveal">
+        <div class="ic" style="background:rgba(227,82,77,.12);color:var(--red)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01"/></svg></div>
+        <h3 data-i18n="f1h">Risk-tiered badges</h3>
+        <p data-i18n="f1b">A traffic-light read on every cache before you commit — so you know what's free vs. what costs a re-download.</p>
+        <div class="badges">
+          <span class="bdg safe" data-i18n="bdgSafe">Safe</span><span class="bdg neutral" data-i18n="bdgMid">Mid cost</span><span class="bdg caution" data-i18n="bdgCaution">Caution</span><span class="bdg heavy" data-i18n="bdgHeavy">Heavy</span>
+        </div>
+      </div>
+      <div class="feat reveal">
+        <div class="ic" style="background:rgba(17,177,161,.12);color:var(--teal)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <h3 data-i18n="f2h">Scheduled auto-clean</h3>
+        <p data-i18n="f2b">Daily, weekly, or monthly via launchd. Stateful tools like Docker stay out of the automatic pass on purpose.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ic" style="background:rgba(51,122,235,.12);color:var(--blue)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6z"/><path d="M10 19a2 2 0 0 0 4 0"/></svg></div>
+        <h3 data-i18n="f3h">Done-notifications</h3>
+        <p data-i18n="f3b">A system notification when a sweep finishes, with how much it freed — manual or scheduled, you always know.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ic" style="background:rgba(143,151,168,.16);color:var(--slate)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
+        <h3 data-i18n="f4h">Protect list</h3>
+        <p data-i18n="f4b">Pin caches you never want swept. Protected items are skipped everywhere — manual, scheduled, and <code>all</code>.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ic" style="background:rgba(239,166,74,.14);color:#e09438"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7 13 15l-4-4-6 6"/><path d="M21 7h-5M21 7v5"/></svg></div>
+        <h3 data-i18n="f5h">Age filter</h3>
+        <p data-i18n="f5b">Only clear what's gone stale — keep caches younger than the window you set, sweep everything older.</p>
+      </div>
+      <div class="feat reveal">
+        <div class="ic" style="background:rgba(140,118,235,.14);color:#8c76eb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 4 5.6 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.6-4-9s1.5-6.5 4-9z"/></svg></div>
+        <h3 data-i18n="f6h">12 languages</h3>
+        <p data-i18n="f6b">Native UI in English, 한국어, 日本語, 中文, and 8 more — picked up from your system, switchable on the fly.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CATEGORIES -->
+<section class="block" id="caches" style="background:var(--bg-tint)">
+  <div class="wrap">
+    <div class="kicker reveal" data-i18n="catsKicker">31 categories</div>
+    <h2 class="head reveal" data-i18n="catsHead">If your toolchain made it, DevSweep probably knows it.</h2>
+    <p class="lead reveal" data-i18n="catsLead">Package managers, build systems, IDE indexes, container runtimes, and AI tooling — each with its own safe path list and native cleaner.</p>
+    <div class="cats reveal" id="cats"></div>
+    <p class="cat-note reveal" data-i18n="catsNote"><span class="hd"></span> dashed = heavy — costly to re-download, so excluded from the default sweep and only cleared on request.</p>
+  </div>
+</section>
+
+<!-- DOWNLOAD -->
+<section class="dl-band" id="download">
+  <div class="wrap dl-inner">
+    <h2 data-i18n="dlHead">Get your gigabytes <span class="accent">back.</span></h2>
+    <p data-i18n="dlSub">Free, open source, and built with zero dependencies — a single <code style="font-family:var(--font-mono)">swiftc</code> build over a readable bash core.</p>
+    <div class="dl-cta">
+      <a class="btn btn-teal" href="https://github.com/umagh0334/devsweep/releases" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+        <span data-i18n="dlCta">Download for macOS</span>
+      </a>
+      <a class="btn btn-line" href="https://github.com/umagh0334/devsweep" target="_blank" rel="noopener" data-i18n="dlSource">Read the source</a>
+    </div>
+    <p class="dl-fine" data-i18n="dlFine">macOS 14+ · Apple Silicon · v0.1.0 · unsigned build — right-click → Open on first launch</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <a class="brand" href="#top">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M15.5 3.5 10.5 8.5"/><path d="M8 7 12.5 11.5"/>
+          <path d="M5.2 13.4c2-2 5.4-2 7.6 0l-2.6 6c-1.4 .7-3.4 .7-4.8 0z"/>
+          <path d="M7.6 13.6 7 19.4M9.9 13.3 9.7 19.9M12 13.9 12.4 19.2"/>
+        </svg>
+      </span>
+      DevSweep
+    </a>
+    <div class="foot-links">
+      <a href="https://github.com/umagh0334/devsweep" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/umagh0334/devsweep/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/umagh0334/devsweep/blob/master/README.md" target="_blank" rel="noopener">Docs</a>
+    </div>
+    <div class="mono" style="opacity:.7">MIT · made for macOS devs</div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ── disk cache map data (name, size GB, color var) ──
+  var segs = [
+    {n:'gradle', g:3.4, c:'--c1'},
+    {n:'docker', g:2.1, c:'--c2'},
+    {n:'Xcode',  g:1.8, c:'--c3'},
+    {n:'npm',    g:1.2, c:'--c4'},
+    {n:'cargo',  g:0.98,c:'--c5'},
+    {n:'CocoaPods',g:0.64,c:'--c6'},
+    {n:'pip',    g:0.41,c:'--c7'},
+    {n:'go',     g:0.38,c:'--c8'},
+    {n:'brew',   g:0.32,c:'--c1'},
+    {n:'pnpm',   g:0.28,c:'--c2'},
+    {n:'SwiftPM',g:0.22,c:'--c3'},
+    {n:'JetBrains',g:0.41,c:'--c4'},
+    {n:'HF',     g:0.15,c:'--c5'},
+    {n:'others', g:0.11,c:'--c6'}
+  ];
+  var total = segs.reduce(function(s,x){return s+x.g;},0);
+  var bar = document.getElementById('bar');
+  var legend = document.getElementById('legend');
+  var fmt = function(g){ return g>=1 ? g.toFixed(1)+'G' : Math.round(g*1024)+'M'; };
+
+  segs.forEach(function(s){
+    var pct = (s.g/total*100).toFixed(2);
+    var el = document.createElement('div');
+    el.className='seg';
+    el.style.background='var('+s.c+')';
+    el.dataset.w=pct;
+    el.setAttribute('tabindex','0');
+    el.setAttribute('aria-label', s.n+' '+fmt(s.g));
+    var tip=document.createElement('span'); tip.className='tip'; tip.textContent=s.n+' · '+fmt(s.g);
+    el.appendChild(tip);
+    bar.appendChild(el);
+    // legend (top items only)
+  });
+  // legend: show the 6 largest
+  segs.slice().sort(function(a,b){return b.g-a.g;}).slice(0,7).forEach(function(s){
+    var lg=document.createElement('span'); lg.className='lg';
+    lg.innerHTML='<span class="sw" style="background:var('+s.c+')"></span>'+s.n+' <span class="sz">'+fmt(s.g)+'</span>';
+    legend.appendChild(lg);
+  });
+
+  var countEl=document.getElementById('count');
+
+  function fill(){
+    var nodes=bar.querySelectorAll('.seg');
+    nodes.forEach(function(el,i){
+      if(reduce){ el.style.width=el.dataset.w+'%'; return; }
+      setTimeout(function(){ el.style.width=el.dataset.w+'%'; }, 120+i*55);
+    });
+    // count up
+    if(reduce){ countEl.textContent=total.toFixed(1); return; }
+    var start=null, dur=1300;
+    function step(t){
+      if(!start) start=t;
+      var p=Math.min(1,(t-start)/dur);
+      var e=1-Math.pow(1-p,3);
+      countEl.textContent=(total*e).toFixed(1);
+      if(p<1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }
+
+  // reveal on scroll + trigger map fill when it enters
+  var io=new IntersectionObserver(function(es){
+    es.forEach(function(e){
+      if(e.isIntersecting){
+        e.target.classList.add('in');
+        if(e.target.id==='map') fill();
+        io.unobserve(e.target);
+      }
+    });
+  },{threshold:.2});
+  document.querySelectorAll('.reveal').forEach(function(el){io.observe(el);});
+
+  // ── category chips ──
+  var cats=[
+    ['gradle','--c1'],['npm','--c4'],['yarn','--c4'],['pnpm','--c2'],['bun','--c4'],
+    ['pip','--c7'],['uv','--c7'],['cargo','--c5'],['go','--c8'],['maven','--c1'],
+    ['cocoapods','--c6'],['swiftpm','--c3'],['composer','--c4'],['nuget','--c4'],['deno','--c6'],
+    ['pub','--c4'],['brew','--c1'],['colima','--c2'],['xcode','--c3'],['vscode','--c3'],
+    ['cursor','--c3'],['zed','--c3'],['codemate','--c3'],
+    ['docker','--c2',1],['playwright','--c6',1],['rustup','--c5',1],['xcode-sim','--c3',1],
+    ['huggingface','--c5',1],['jetbrains','--c4',1],['androidstudio','--c6',1],['codex','--c3',1]
+  ];
+  var cc=document.getElementById('cats');
+  cats.forEach(function(c){
+    var a=document.createElement('span');
+    a.className='cat'+(c[2]?' h':'');
+    a.innerHTML='<span class="d" style="background:var('+c[1]+')"></span>'+c[0];
+    cc.appendChild(a);
+  });
+})();
+</script>
+
+<!-- ── i18n: system-locale detection + 12-language dictionary (mirrors the app's AppLanguage.systemDefault) ── -->
+<script>
+(function(){
+  var DICT={
+    navHow:{en:`How it works`,ko:`작동 방식`,ja:`仕組み`,"zh-Hans":`工作原理`,"zh-Hant":`運作方式`,th:`วิธีทำงาน`,vi:`Cách hoạt động`,it:`Come funziona`,fr:`Fonctionnement`,es:`Cómo funciona`,pt:`Como funciona`,hr:`Kako radi`,de:`So funktioniert's`,pl:`Jak to działa`,id:`Cara kerja`},
+    navFeat:{en:`Features`,ko:`기능`,ja:`機能`,"zh-Hans":`功能`,"zh-Hant":`功能`,th:`ฟีเจอร์`,vi:`Tính năng`,it:`Funzioni`,fr:`Fonctions`,es:`Funciones`,pt:`Recursos`,hr:`Značajke`,de:`Funktionen`,pl:`Funkcje`,id:`Fitur`},
+    navCaches:{en:`Caches`,ko:`캐시`,ja:`キャッシュ`,"zh-Hans":`缓存`,"zh-Hant":`快取`,th:`แคช`,vi:`Bộ nhớ đệm`,it:`Cache`,fr:`Caches`,es:`Cachés`,pt:`Caches`,hr:`Predmemorije`,de:`Caches`,pl:`Cache`,id:`Cache`},
+    navDownload:{en:`Download`,ko:`다운로드`,ja:`ダウンロード`,"zh-Hans":`下载`,"zh-Hant":`下載`,th:`ดาวน์โหลด`,vi:`Tải về`,it:`Scarica`,fr:`Télécharger`,es:`Descargar`,pt:`Baixar`,hr:`Preuzmi`,de:`Download`,pl:`Pobierz`,id:`Unduh`},
+
+    eyebrow:{en:`<span class="dot"></span> macOS · 31 cache categories · open source`,ko:`<span class="dot"></span> macOS · 캐시 카테고리 31종 · 오픈소스`,ja:`<span class="dot"></span> macOS · キャッシュ31種 · オープンソース`,"zh-Hans":`<span class="dot"></span> macOS · 31 个缓存类别 · 开源`,"zh-Hant":`<span class="dot"></span> macOS · 31 個快取類別 · 開源`,th:`<span class="dot"></span> macOS · แคช 31 ประเภท · โอเพนซอร์ส`,vi:`<span class="dot"></span> macOS · 31 loại bộ nhớ đệm · mã nguồn mở`,it:`<span class="dot"></span> macOS · 31 categorie di cache · open source`,fr:`<span class="dot"></span> macOS · 31 types de cache · open source`,es:`<span class="dot"></span> macOS · 31 categorías de caché · código abierto`,pt:`<span class="dot"></span> macOS · 31 categorias de cache · código aberto`,hr:`<span class="dot"></span> macOS · 31 kategorija predmemorije · otvoreni kod`,de:`<span class="dot"></span> macOS · 31 Cache-Kategorien · Open Source`,pl:`<span class="dot"></span> macOS · 31 kategorii cache · open source`,id:`<span class="dot"></span> macOS · 31 kategori cache · open source`},
+    heroTitle:{en:`Your build caches are <span class="accent">hoarding gigabytes.</span>`,ko:`빌드 캐시가 <span class="accent">기가바이트씩 쌓이고 있어요.</span>`,ja:`ビルドキャッシュが<span class="accent">ギガ単位で溜まっています。</span>`,"zh-Hans":`构建缓存正在<span class="accent">悄悄吞掉你的硬盘。</span>`,"zh-Hant":`建置快取正在<span class="accent">悄悄吞掉你的硬碟。</span>`,th:`แคชจากการบิลด์กำลัง<span class="accent">กินพื้นที่เป็นกิกะไบต์</span>`,vi:`Bộ nhớ đệm build đang <span class="accent">ngốn hàng gigabyte.</span>`,it:`Le cache di build si <span class="accent">mangiano i tuoi gigabyte.</span>`,fr:`Vos caches de build <span class="accent">accaparent vos gigaoctets.</span>`,es:`Tus cachés de compilación <span class="accent">acaparan tus gigas.</span>`,pt:`Seus caches de build estão <span class="accent">devorando seus gigabytes.</span>`,hr:`Predmemorije bilda <span class="accent">gutaju gigabajte.</span>`,de:`Deine Build-Caches <span class="accent">fressen Gigabytes.</span>`,pl:`Twoje cache'y budowania <span class="accent">pochłaniają gigabajty.</span>`,id:`Cache build kamu <span class="accent">menelan gigabyte diam-diam.</span>`},
+    heroSub:{en:`Every <b>gradle</b> build, <b>Docker</b> pull, and <b>npm install</b> leaves caches behind. DevSweep maps them, flags what's safe, and sweeps them back — no guesswork.`,ko:`<b>gradle</b> 빌드, <b>Docker</b> 풀, <b>npm install</b> 마다 캐시가 쌓여요. DevSweep이 전부 지도로 보여주고, 안전한 것만 표시해 쓸어담아요 — 추측 없이.`,ja:`<b>gradle</b> ビルド、<b>Docker</b> プル、<b>npm install</b> のたびにキャッシュが残ります。DevSweep が可視化し、安全なものを示して一掃します — 推測なしで。`,"zh-Hans":`每次 <b>gradle</b> 构建、<b>Docker</b> 拉取、<b>npm install</b> 都会留下缓存。DevSweep 把它们映射出来，标出哪些可安全清理，一键扫净 — 无需猜测。`,"zh-Hant":`每次 <b>gradle</b> 建置、<b>Docker</b> 拉取、<b>npm install</b> 都會留下快取。DevSweep 把它們映射出來，標出哪些可安全清理，一鍵掃淨 — 無需猜測。`,th:`ทุกครั้งที่ <b>gradle</b> บิลด์, <b>Docker</b> พูล, <b>npm install</b> ล้วนทิ้งแคชไว้ DevSweep ทำแผนที่ บอกว่าอันไหนปลอดภัย แล้วกวาดคืนให้ — ไม่ต้องเดา`,vi:`Mỗi lần <b>gradle</b> build, <b>Docker</b> pull, <b>npm install</b> đều để lại bộ nhớ đệm. DevSweep lập bản đồ, đánh dấu cái nào an toàn, rồi quét sạch — không phải đoán.`,it:`Ogni build <b>gradle</b>, pull <b>Docker</b> e <b>npm install</b> lascia cache. DevSweep le mappa, segnala cosa è sicuro e le spazza via — senza tirare a indovinare.`,fr:`Chaque build <b>gradle</b>, pull <b>Docker</b> et <b>npm install</b> laisse des caches. DevSweep les cartographie, signale ce qui est sûr et les balaie — sans deviner.`,es:`Cada build de <b>gradle</b>, pull de <b>Docker</b> y <b>npm install</b> deja cachés. DevSweep las mapea, marca lo seguro y las barre — sin adivinar.`,pt:`Cada build do <b>gradle</b>, pull do <b>Docker</b> e <b>npm install</b> deixa caches. O DevSweep mapeia, sinaliza o que é seguro e varre tudo — sem adivinhação.`,hr:`Svaki <b>gradle</b> build, <b>Docker</b> pull i <b>npm install</b> ostavlja predmemoriju. DevSweep ih mapira, označi što je sigurno i pomete ih — bez nagađanja.`,de:`Jeder <b>gradle</b>-Build, <b>Docker</b>-Pull und <b>npm install</b> hinterlässt Caches. DevSweep kartiert sie, markiert was sicher ist und räumt sie weg — ohne Rätselraten.`,pl:`Każdy build <b>gradle</b>, pull <b>Docker</b> i <b>npm install</b> zostawia cache'y. DevSweep je mapuje, oznacza co jest bezpieczne i czyści — bez zgadywania.`,id:`Setiap build <b>gradle</b>, pull <b>Docker</b>, dan <b>npm install</b> meninggalkan cache. DevSweep memetakannya, menandai yang aman, lalu menyapunya bersih — tanpa tebak-tebakan.`},
+    mapLabel:{en:`Reclaimable on this Mac`,ko:`이 Mac에서 회수 가능`,ja:`この Mac で回収可能`,"zh-Hans":`此 Mac 上可回收`,"zh-Hant":`此 Mac 上可回收`,th:`กู้คืนได้บน Mac นี้`,vi:`Có thể thu hồi trên Mac này`,it:`Recuperabile su questo Mac`,fr:`Récupérable sur ce Mac`,es:`Recuperable en este Mac`,pt:`Recuperável neste Mac`,hr:`Može se vratiti na ovom Macu`,de:`Rückgewinnbar auf diesem Mac`,pl:`Do odzyskania na tym Macu`,id:`Dapat direklamasi di Mac ini`},
+    mapCap:{en:`across 14 caches`,ko:`14개 캐시에서`,ja:`14 個のキャッシュ`,"zh-Hans":`来自 14 个缓存`,"zh-Hant":`來自 14 個快取`,th:`จาก 14 แคช`,vi:`từ 14 bộ nhớ đệm`,it:`in 14 cache`,fr:`dans 14 caches`,es:`en 14 cachés`,pt:`em 14 caches`,hr:`u 14 predmemorija`,de:`aus 14 Caches`,pl:`z 14 cache'y`,id:`dari 14 cache`},
+    mapOf:{en:`scanned in <b>1.2s</b><br>nothing deleted yet`,ko:`<b>1.2초</b> 만에 스캔<br>아직 아무것도 안 지움`,ja:`<b>1.2秒</b>でスキャン<br>まだ何も削除していません`,"zh-Hans":`<b>1.2 秒</b>扫描完成<br>尚未删除任何内容`,"zh-Hant":`<b>1.2 秒</b>掃描完成<br>尚未刪除任何內容`,th:`สแกนใน <b>1.2 วินาที</b><br>ยังไม่ลบอะไร`,vi:`quét trong <b>1.2s</b><br>chưa xóa gì cả`,it:`scansione in <b>1,2s</b><br>ancora nulla eliminato`,fr:`analysé en <b>1,2 s</b><br>rien supprimé pour l'instant`,es:`escaneado en <b>1,2 s</b><br>nada eliminado aún`,pt:`verificado em <b>1,2s</b><br>nada apagado ainda`,hr:`skenirano za <b>1,2s</b><br>još ništa obrisano`,de:`gescannt in <b>1,2 s</b><br>noch nichts gelöscht`,pl:`skanowanie w <b>1,2 s</b><br>nic jeszcze nie usunięto`,id:`dipindai dalam <b>1,2 dtk</b><br>belum ada yang dihapus`},
+    ctaDl:{en:`Download for macOS`,ko:`macOS용 다운로드`,ja:`macOS 版をダウンロード`,"zh-Hans":`下载 macOS 版`,"zh-Hant":`下載 macOS 版`,th:`ดาวน์โหลดสำหรับ macOS`,vi:`Tải về cho macOS`,it:`Scarica per macOS`,fr:`Télécharger pour macOS`,es:`Descargar para macOS`,pt:`Baixar para macOS`,hr:`Preuzmi za macOS`,de:`Für macOS laden`,pl:`Pobierz na macOS`,id:`Unduh untuk macOS`},
+    ctaGh:{en:`View on GitHub`,ko:`GitHub에서 보기`,ja:`GitHub で見る`,"zh-Hans":`在 GitHub 查看`,"zh-Hant":`在 GitHub 查看`,th:`ดูบน GitHub`,vi:`Xem trên GitHub`,it:`Vedi su GitHub`,fr:`Voir sur GitHub`,es:`Ver en GitHub`,pt:`Ver no GitHub`,hr:`Pogledaj na GitHubu`,de:`Auf GitHub ansehen`,pl:`Zobacz na GitHubie`,id:`Lihat di GitHub`},
+    heroMeta:{en:`macOS 14+ · Apple Silicon · Free & open source · no telemetry`,ko:`macOS 14+ · Apple Silicon · 무료·오픈소스 · 추적 없음`,ja:`macOS 14+ · Apple Silicon · 無料・オープンソース · トラッキングなし`,"zh-Hans":`macOS 14+ · Apple Silicon · 免费开源 · 无遥测`,"zh-Hant":`macOS 14+ · Apple Silicon · 免費開源 · 無遙測`,th:`macOS 14+ · Apple Silicon · ฟรีและโอเพนซอร์ส · ไม่มีการติดตาม`,vi:`macOS 14+ · Apple Silicon · Miễn phí & mã nguồn mở · không theo dõi`,it:`macOS 14+ · Apple Silicon · Gratis e open source · nessun tracciamento`,fr:`macOS 14+ · Apple Silicon · Gratuit et open source · aucun pistage`,es:`macOS 14+ · Apple Silicon · Gratis y open source · sin telemetría`,pt:`macOS 14+ · Apple Silicon · Grátis e open source · sem telemetria`,hr:`macOS 14+ · Apple Silicon · Besplatno i otvoreni kod · bez praćenja`,de:`macOS 14+ · Apple Silicon · Kostenlos & Open Source · keine Telemetrie`,pl:`macOS 14+ · Apple Silicon · Darmowy i open source · bez telemetrii`,id:`macOS 14+ · Apple Silicon · Gratis & open source · tanpa telemetri`},
+
+    trustKicker:{en:`Safe by construction`,ko:`설계부터 안전하게`,ja:`設計から安全`,"zh-Hans":`从设计上安全`,"zh-Hant":`從設計上安全`,th:`ปลอดภัยตั้งแต่การออกแบบ`,vi:`An toàn từ thiết kế`,it:`Sicuro per progettazione`,fr:`Sûr par conception`,es:`Seguro por diseño`,pt:`Seguro por design`,hr:`Sigurno po dizajnu`,de:`Sicher durch Design`,pl:`Bezpieczny z założenia`,id:`Aman sejak awal`},
+    trustHead:{en:`A delete tool you can actually trust pointing at your home folder.`,ko:`홈 폴더에 겨눠도 믿을 수 있는 삭제 도구.`,ja:`ホームフォルダに向けても安心できる削除ツール。`,"zh-Hans":`一个真正敢对着主目录用的删除工具。`,"zh-Hant":`一個真正敢對著主目錄用的刪除工具。`,th:`เครื่องมือลบที่ไว้ใจให้ชี้ไปที่โฮมโฟลเดอร์ได้จริง`,vi:`Công cụ xóa bạn thực sự tin tưởng khi nhắm vào thư mục nhà.`,it:`Uno strumento di pulizia di cui ti puoi fidare anche puntandolo sulla home.`,fr:`Un outil de suppression à qui confier votre dossier personnel.`,es:`Una herramienta de borrado en la que confiar apuntando a tu carpeta personal.`,pt:`Uma ferramenta de exclusão em que você confia apontada para sua pasta pessoal.`,hr:`Alat za brisanje kojem možeš vjerovati i kad cilja na tvoju kućnu mapu.`,de:`Ein Lösch-Tool, dem du wirklich vertrauen kannst — auch in deinem Home-Verzeichnis.`,pl:`Narzędzie do usuwania, któremu możesz zaufać nawet w swoim katalogu domowym.`,id:`Alat hapus yang benar-benar bisa kamu percaya untuk menunjuk folder home-mu.`},
+    trustLead:{en:`DevSweep never guesses. It only touches paths it explicitly knows are caches, and it shows you everything before a single byte moves.`,ko:`DevSweep은 추측하지 않아요. 캐시라고 명시된 경로만 건드리고, 1바이트라도 움직이기 전에 전부 보여줘요.`,ja:`DevSweep は推測しません。キャッシュだと明示された経路だけに触れ、1バイトでも動かす前にすべてを見せます。`,"zh-Hans":`DevSweep 从不猜测。它只触碰明确标记为缓存的路径，并在动一个字节之前把一切展示给你。`,"zh-Hant":`DevSweep 從不猜測。它只觸碰明確標記為快取的路徑，並在動一個位元組之前把一切展示給你。`,th:`DevSweep ไม่เดา แตะเฉพาะพาธที่ระบุชัดว่าเป็นแคช และแสดงทุกอย่างก่อนจะขยับแม้แต่ไบต์เดียว`,vi:`DevSweep không bao giờ đoán. Nó chỉ chạm vào các đường dẫn được xác định rõ là bộ nhớ đệm, và cho bạn xem mọi thứ trước khi xóa dù chỉ một byte.`,it:`DevSweep non tira a indovinare. Tocca solo i percorsi che sa essere cache e ti mostra tutto prima di muovere un solo byte.`,fr:`DevSweep ne devine jamais. Il ne touche que les chemins explicitement connus comme caches, et vous montre tout avant de déplacer le moindre octet.`,es:`DevSweep nunca adivina. Solo toca rutas que sabe que son cachés y te muestra todo antes de mover un solo byte.`,pt:`O DevSweep nunca adivinha. Só toca em caminhos que sabe serem cache e mostra tudo antes de mover um único byte.`,hr:`DevSweep nikad ne nagađa. Dira samo putanje za koje zna da su predmemorija i pokaže ti sve prije nego pomakne ijedan bajt.`,de:`DevSweep rät nie. Es berührt nur Pfade, die es explizit als Caches kennt, und zeigt dir alles, bevor ein einziges Byte bewegt wird.`,pl:`DevSweep nigdy nie zgaduje. Dotyka tylko ścieżek, o których wie, że są cache'ami, i pokazuje ci wszystko zanim ruszy choć jeden bajt.`,id:`DevSweep tidak pernah menebak. Hanya menyentuh path yang secara eksplisit diketahui sebagai cache, dan menampilkan segalanya sebelum satu byte pun bergerak.`},
+    t1h:{en:`Whitelist-only`,ko:`화이트리스트 전용`,ja:`ホワイトリスト方式`,"zh-Hans":`仅白名单`,"zh-Hant":`僅白名單`,th:`ไวต์ลิสต์เท่านั้น`,vi:`Chỉ danh sách trắng`,it:`Solo whitelist`,fr:`Liste blanche uniquement`,es:`Solo lista blanca`,pt:`Apenas lista branca`,hr:`Samo bijela lista`,de:`Nur Whitelist`,pl:`Tylko lista dozwolonych`,id:`Hanya whitelist`},
+    t1b:{en:`Every path and command is explicitly listed. Anything DevSweep doesn't recognize, it leaves untouched — your source and projects are never in scope.`,ko:`모든 경로와 명령이 명시돼 있어요. 모르는 건 손대지 않아요 — 소스와 프로젝트는 절대 대상이 아니에요.`,ja:`すべての経路とコマンドが明示されています。認識できないものには触れません — ソースやプロジェクトは対象外です。`,"zh-Hans":`每条路径和命令都明确列出。无法识别的一律不动 — 你的源码和项目永远不在范围内。`,"zh-Hant":`每條路徑和命令都明確列出。無法辨識的一律不動 — 你的原始碼和專案永遠不在範圍內。`,th:`ทุกพาธและคำสั่งถูกระบุไว้ชัด สิ่งที่ไม่รู้จักจะไม่ถูกแตะ — ซอร์สและโปรเจกต์ไม่อยู่ในขอบเขตเลย`,vi:`Mọi đường dẫn và lệnh đều được liệt kê rõ. Thứ gì không nhận ra thì để nguyên — mã nguồn và dự án không bao giờ nằm trong phạm vi.`,it:`Ogni percorso e comando è elencato esplicitamente. Ciò che non riconosce resta intatto — sorgenti e progetti non sono mai inclusi.`,fr:`Chaque chemin et commande est listé explicitement. Ce qu'il ne reconnaît pas reste intact — vos sources et projets ne sont jamais concernés.`,es:`Cada ruta y comando está listado explícitamente. Lo que no reconoce, lo deja intacto — tu código y proyectos nunca entran.`,pt:`Cada caminho e comando está listado explicitamente. O que não reconhece, deixa intacto — seu código e projetos nunca entram no escopo.`,hr:`Svaka putanja i naredba izričito su navedene. Što ne prepozna, ne dira — tvoj kod i projekti nikad nisu u dosegu.`,de:`Jeder Pfad und Befehl ist explizit aufgeführt. Was DevSweep nicht kennt, lässt es unberührt — dein Code und deine Projekte sind niemals betroffen.`,pl:`Każda ścieżka i polecenie są jawnie wymienione. Czego DevSweep nie rozpoznaje, tego nie rusza — twój kod i projekty nigdy nie są w zasięgu.`,id:`Setiap path dan perintah terdaftar secara eksplisit. Apa pun yang tidak dikenali DevSweep dibiarkan utuh — source dan proyek kamu tidak pernah tersentuh.`},
+    t2h:{en:`Dry-run by default`,ko:`기본은 미리보기`,ja:`既定はドライラン`,"zh-Hans":`默认空运行`,"zh-Hant":`預設空運行`,th:`ดรายรันโดยปริยาย`,vi:`Mặc định chạy thử`,it:`Dry-run di default`,fr:`Simulation par défaut`,es:`Simulación por defecto`,pt:`Dry-run por padrão`,hr:`Zadano probni rad`,de:`Standardmäßig Dry-Run`,pl:`Dry-run domyślnie`,id:`Dry-run secara default`},
+    t2b:{en:`Run it and you see exactly what would be freed. Deletion only happens when you confirm with <code>--yes</code> — or one click in the app.`,ko:`실행하면 뭘 얼마나 비울지 그대로 보여줘요. 삭제는 <code>--yes</code>로 확인하거나 앱에서 한 번 클릭할 때만 일어나요.`,ja:`実行すると何が空くか正確に表示されます。削除は <code>--yes</code> で確認するか、アプリで1クリックした時だけです。`,"zh-Hans":`运行后会精确显示能释放什么。只有用 <code>--yes</code> 确认，或在应用里点一下，才会真正删除。`,"zh-Hant":`執行後會精確顯示能釋放什麼。只有用 <code>--yes</code> 確認，或在應用裡點一下，才會真正刪除。`,th:`รันแล้วจะเห็นชัดว่าจะคืนพื้นที่อะไรบ้าง การลบเกิดขึ้นเมื่อยืนยันด้วย <code>--yes</code> หรือคลิกเดียวในแอปเท่านั้น`,vi:`Chạy thử và bạn thấy chính xác những gì sẽ được giải phóng. Việc xóa chỉ xảy ra khi bạn xác nhận bằng <code>--yes</code> — hoặc một cú nhấp trong ứng dụng.`,it:`Eseguilo e vedi esattamente cosa verrebbe liberato. L'eliminazione avviene solo se confermi con <code>--yes</code> — o con un clic nell'app.`,fr:`Lancez-le et voyez exactement ce qui serait libéré. La suppression n'a lieu qu'avec <code>--yes</code> — ou un clic dans l'app.`,es:`Ejecútalo y verás exactamente qué se liberaría. El borrado solo ocurre al confirmar con <code>--yes</code> — o un clic en la app.`,pt:`Execute e veja exatamente o que seria liberado. A exclusão só acontece ao confirmar com <code>--yes</code> — ou um clique no app.`,hr:`Pokreni i vidiš točno što bi se oslobodilo. Brisanje se događa samo kad potvrdiš s <code>--yes</code> — ili jednim klikom u aplikaciji.`,de:`Starte es und sieh genau, was freigegeben würde. Gelöscht wird nur bei Bestätigung mit <code>--yes</code> — oder einem Klick in der App.`,pl:`Uruchom i zobacz dokładnie, co zostałoby zwolnione. Usuwanie następuje tylko po potwierdzeniu przez <code>--yes</code> — lub jednym kliknięciem w aplikacji.`,id:`Jalankan dan lihat persis apa yang akan dibebaskan. Penghapusan hanya terjadi saat kamu konfirmasi dengan <code>--yes</code> — atau satu klik di aplikasi.`},
+    t3h:{en:`Native cleanup first`,ko:`네이티브 정리 우선`,ja:`ネイティブ整理を優先`,"zh-Hans":`优先原生清理`,"zh-Hant":`優先原生清理`,th:`ใช้ตัวล้างเนทีฟก่อน`,vi:`Ưu tiên dọn dẹp gốc`,it:`Prima la pulizia nativa`,fr:`Nettoyage natif d'abord`,es:`Limpieza nativa primero`,pt:`Limpeza nativa primeiro`,hr:`Prvo izvorno čišćenje`,de:`Zuerst nativer Cleaner`,pl:`Najpierw czyszczenie natywne`,id:`Pembersih native lebih dulu`},
+    t3b:{en:`Where a tool has its own cleaner — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep runs that, and only falls back to <code>rm</code> when there's none.`,ko:`도구에 자체 정리 명령이 있으면 — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — 그걸 쓰고, 없을 때만 <code>rm</code>으로 폴백해요.`,ja:`ツールに専用のクリーナーがあれば — <code>brew cleanup</code>、<code>npm cache clean</code>、<code>docker prune</code> — それを実行し、無い時だけ <code>rm</code> にフォールバックします。`,"zh-Hans":`工具若有自带清理命令 — <code>brew cleanup</code>、<code>npm cache clean</code>、<code>docker prune</code> — 就用它，只有没有时才退回 <code>rm</code>。`,"zh-Hant":`工具若有自帶清理指令 — <code>brew cleanup</code>、<code>npm cache clean</code>、<code>docker prune</code> — 就用它，只有沒有時才退回 <code>rm</code>。`,th:`ถ้าเครื่องมือมีตัวล้างของตัวเอง — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep จะใช้อันนั้น และถอยไปใช้ <code>rm</code> เฉพาะเมื่อไม่มี`,vi:`Nếu công cụ có trình dọn riêng — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep dùng nó, chỉ quay lại <code>rm</code> khi không có.`,it:`Se uno strumento ha il suo pulitore — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep usa quello e ricorre a <code>rm</code> solo se manca.`,fr:`Si un outil a son propre nettoyeur — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep l'utilise et ne recourt à <code>rm</code> qu'à défaut.`,es:`Si una herramienta tiene su propio limpiador — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep lo usa y solo recurre a <code>rm</code> si no hay.`,pt:`Se a ferramenta tem o próprio limpador — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — o DevSweep usa ele e só recorre a <code>rm</code> quando não há.`,hr:`Ako alat ima vlastiti čistač — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep koristi njega, a na <code>rm</code> se vraća samo kad ga nema.`,de:`Hat ein Tool einen eigenen Cleaner — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — nutzt DevSweep den, und weicht nur auf <code>rm</code> aus, wenn keiner vorhanden ist.`,pl:`Jeśli narzędzie ma własny cleaner — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep go używa i sięga po <code>rm</code> tylko gdy go brak.`,id:`Jika suatu alat punya cleaner sendiri — <code>brew cleanup</code>, <code>npm cache clean</code>, <code>docker prune</code> — DevSweep menggunakannya, dan baru beralih ke <code>rm</code> kalau tidak ada.`},
+
+    demoKicker:{en:`The engine`,ko:`엔진`,ja:`エンジン`,"zh-Hans":`引擎`,"zh-Hant":`引擎`,th:`เอนจิน`,vi:`Lõi engine`,it:`Il motore`,fr:`Le moteur`,es:`El motor`,pt:`O motor`,hr:`Pogon`,de:`Die Engine`,pl:`Silnik`,id:`Mesin inti`},
+    demoHead:{en:`A bash core you can read in one sitting.`,ko:`한자리에서 다 읽히는 bash 코어.`,ja:`一気に読み切れる bash コア。`,"zh-Hans":`一口气就能读完的 bash 内核。`,"zh-Hant":`一口氣就能讀完的 bash 核心。`,th:`แกน bash ที่อ่านจบได้ในครั้งเดียว`,vi:`Một lõi bash đọc hết trong một lần ngồi.`,it:`Un core bash che leggi tutto d'un fiato.`,fr:`Un cœur bash qui se lit d'une traite.`,es:`Un núcleo bash que lees de una sentada.`,pt:`Um núcleo bash que você lê de uma sentada.`,hr:`Bash jezgra koju pročitaš u jednom dahu.`,de:`Ein Bash-Kern, den du in einem Rutsch liest.`,pl:`Rdzeń bash, który przeczytasz za jednym razem.`,id:`Inti bash yang bisa kamu baca dalam sekali duduk.`},
+    demoLead:{en:`The GUI is a thin shell over a transparent CLI. Same scan, same safety, scriptable in CI — and the app speaks 15 languages on top.`,ko:`GUI는 투명한 CLI 위의 얇은 껍데기예요. 같은 스캔, 같은 안전성, CI에서 스크립트로도 — 게다가 앱은 15개 언어를 해요.`,ja:`GUI は透明な CLI の薄いシェルです。同じスキャン、同じ安全性、CI でスクリプト化も可能 — そのうえアプリは15言語に対応。`,"zh-Hans":`GUI 只是透明 CLI 之上的薄壳。相同的扫描、相同的安全、可在 CI 里脚本化 — 而且应用支持 15 种语言。`,"zh-Hant":`GUI 只是透明 CLI 之上的薄殼。相同的掃描、相同的安全、可在 CI 裡腳本化 — 而且應用支援 15 種語言。`,th:`GUI เป็นเพียงเปลือกบาง ๆ ครอบ CLI ที่โปร่งใส สแกนเหมือนกัน ปลอดภัยเหมือนกัน สคริปต์ใน CI ได้ — แถมแอปรองรับ 15 ภาษา`,vi:`GUI chỉ là lớp vỏ mỏng trên một CLI minh bạch. Cùng cách quét, cùng độ an toàn, chạy script trong CI — và ứng dụng nói 15 thứ tiếng.`,it:`La GUI è un guscio sottile su una CLI trasparente. Stessa scansione, stessa sicurezza, scriptabile in CI — e l'app parla 15 lingue.`,fr:`L'interface n'est qu'une fine coque sur une CLI transparente. Même analyse, même sûreté, scriptable en CI — et l'app parle 15 langues.`,es:`La GUI es una fina capa sobre una CLI transparente. Mismo escaneo, misma seguridad, scriptable en CI — y la app habla 15 idiomas.`,pt:`A GUI é uma casca fina sobre uma CLI transparente. Mesmo escaneamento, mesma segurança, programável em CI — e o app fala 15 idiomas.`,hr:`GUI je tanka ljuska nad prozirnim CLI-jem. Isto skeniranje, ista sigurnost, skriptabilno u CI-ju — i aplikacija govori 15 jezika.`,de:`Die GUI ist eine dünne Hülle über einer transparenten CLI. Gleicher Scan, gleiche Sicherheit, skriptbar in CI — und die App spricht obendrein 15 Sprachen.`,pl:`GUI to cienka powłoka nad przejrzystym CLI. Ten sam skan, to samo bezpieczeństwo, skryptowalny w CI — a aplikacja mówi dodatkowo w 15 językach.`,id:`GUI hanyalah lapisan tipis di atas CLI yang transparan. Pemindaian sama, keamanan sama, bisa di-script di CI — dan aplikasinya berbicara dalam 15 bahasa.`},
+
+    featKicker:{en:`Built for daily use`,ko:`매일 쓰라고 만든`,ja:`毎日使うための設計`,"zh-Hans":`为日常使用打造`,"zh-Hant":`為日常使用打造`,th:`ออกแบบมาเพื่อใช้ทุกวัน`,vi:`Thiết kế để dùng hằng ngày`,it:`Pensato per l'uso quotidiano`,fr:`Conçu pour l'usage quotidien`,es:`Hecho para el uso diario`,pt:`Feito para uso diário`,hr:`Stvoreno za svakodnevnu upotrebu`,de:`Für den täglichen Einsatz`,pl:`Zaprojektowany do codziennego użytku`,id:`Dibuat untuk penggunaan harian`},
+    featHead:{en:`More than a delete button.`,ko:`단순한 삭제 버튼 그 이상.`,ja:`ただの削除ボタンではありません。`,"zh-Hans":`不只是一个删除按钮。`,"zh-Hant":`不只是一個刪除按鈕。`,th:`มากกว่าแค่ปุ่มลบ`,vi:`Hơn cả một nút xóa.`,it:`Più di un pulsante elimina.`,fr:`Plus qu'un bouton supprimer.`,es:`Más que un botón de borrar.`,pt:`Mais que um botão de excluir.`,hr:`Više od gumba za brisanje.`,de:`Mehr als ein Löschen-Knopf.`,pl:`Więcej niż przycisk usuwania.`,id:`Lebih dari sekadar tombol hapus.`},
+    featLead:{en:`Everything you'd want before, during, and after a sweep — so cleanup becomes something you set once and stop thinking about.`,ko:`정리 전·중·후에 필요한 모든 것 — 한 번 설정해두면 더는 신경 안 써도 되게.`,ja:`整理の前・最中・後に欲しいものを全部 — 一度設定すれば、あとは考えなくて済むように。`,"zh-Hans":`清理前、清理中、清理后想要的一切 — 让清理变成设置一次就不用再操心的事。`,"zh-Hant":`清理前、清理中、清理後想要的一切 — 讓清理變成設定一次就不用再操心的事。`,th:`ทุกอย่างที่อยากได้ทั้งก่อน ระหว่าง และหลังการกวาด — ตั้งครั้งเดียวแล้วไม่ต้องคิดถึงอีก`,vi:`Mọi thứ bạn cần trước, trong và sau khi quét — để dọn dẹp thành việc đặt một lần rồi quên.`,it:`Tutto ciò che serve prima, durante e dopo una pulizia — così la imposti una volta e non ci pensi più.`,fr:`Tout ce qu'il faut avant, pendant et après un balayage — réglé une fois, oublié ensuite.`,es:`Todo lo que quieres antes, durante y después de un barrido — lo configuras una vez y te olvidas.`,pt:`Tudo que você quer antes, durante e depois de uma varredura — configure uma vez e esqueça.`,hr:`Sve što treba prije, tijekom i nakon čišćenja — postaviš jednom i više ne razmišljaš.`,de:`Alles, was du vor, während und nach einem Sweep brauchst — einmal einrichten und nicht mehr drüber nachdenken.`,pl:`Wszystko, czego potrzebujesz przed, w trakcie i po czyszczeniu — skonfiguruj raz i zapomnij.`,id:`Semua yang kamu butuhkan sebelum, selama, dan setelah pembersihan — atur sekali dan lupakan.`},
+    f1h:{en:`Risk-tiered badges`,ko:`위험도 배지`,ja:`リスク別バッジ`,"zh-Hans":`风险分级标签`,"zh-Hant":`風險分級標籤`,th:`ป้ายระดับความเสี่ยง`,vi:`Nhãn theo mức rủi ro`,it:`Badge per livello di rischio`,fr:`Badges par niveau de risque`,es:`Insignias por nivel de riesgo`,pt:`Selos por nível de risco`,hr:`Oznake po riziku`,de:`Risikostufen-Badges`,pl:`Oznaczenia poziomu ryzyka`,id:`Lencana tingkat risiko`},
+    f1b:{en:`A traffic-light read on every cache before you commit — so you know what's free vs. what costs a re-download.`,ko:`정리하기 전에 캐시마다 신호등처럼 한눈에 — 뭐가 공짜고 뭐가 재다운로드 비용인지 알 수 있게.`,ja:`実行前にキャッシュごとに信号機のように一目で — 無料なものと再ダウンロードのコストが分かります。`,"zh-Hans":`动手前对每个缓存做红绿灯式判读 — 一眼看出哪些免费、哪些要付重新下载的代价。`,"zh-Hant":`動手前對每個快取做紅綠燈式判讀 — 一眼看出哪些免費、哪些要付重新下載的代價。`,th:`อ่านแบบไฟจราจรทุกแคชก่อนลงมือ — รู้ว่าอันไหนฟรี อันไหนต้องเสียค่าดาวน์โหลดใหม่`,vi:`Đọc kiểu đèn giao thông cho từng bộ nhớ đệm trước khi quyết — biết cái nào miễn phí, cái nào tốn công tải lại.`,it:`Una lettura a semaforo su ogni cache prima di agire — sai cosa è gratis e cosa costa un nuovo download.`,fr:`Une lecture façon feu tricolore sur chaque cache avant d'agir — vous savez ce qui est gratuit et ce qui coûte un retéléchargement.`,es:`Una lectura tipo semáforo de cada caché antes de actuar — sabes qué es gratis y qué cuesta una redescarga.`,pt:`Uma leitura tipo semáforo de cada cache antes de agir — você sabe o que é grátis e o que custa um novo download.`,hr:`Semaforsko očitanje svake predmemorije prije nego što kreneš — znaš što je besplatno, a što košta ponovno preuzimanje.`,de:`Ampel-Bewertung jedes Caches vor dem Löschen — du weißt sofort, was kostenlos ist und was einen Re-Download kostet.`,pl:`Sygnalizacja świetlna dla każdego cache'a przed akcją — wiesz, co jest darmowe, a co kosztuje ponowne pobranie.`,id:`Pembacaan lampu lalu lintas untuk setiap cache sebelum kamu bertindak — tahu mana yang gratis vs. mana yang butuh unduh ulang.`},
+    f2h:{en:`Scheduled auto-clean`,ko:`예약 자동 정리`,ja:`スケジュール自動整理`,"zh-Hans":`定时自动清理`,"zh-Hant":`定時自動清理`,th:`ล้างอัตโนมัติตามกำหนด`,vi:`Tự dọn theo lịch`,it:`Pulizia automatica pianificata`,fr:`Nettoyage auto planifié`,es:`Limpieza automática programada`,pt:`Limpeza automática agendada`,hr:`Zakazano automatsko čišćenje`,de:`Geplante Auto-Bereinigung`,pl:`Zaplanowane automatyczne czyszczenie`,id:`Pembersihan otomatis terjadwal`},
+    f2b:{en:`Daily, weekly, or monthly via launchd. Stateful tools like Docker stay out of the automatic pass on purpose.`,ko:`launchd로 매일·매주·매월. Docker처럼 상태가 있는 도구는 일부러 자동 정리에서 빠져요.`,ja:`launchd で毎日・毎週・毎月。Docker のような状態を持つツールは、あえて自動整理から除外します。`,"zh-Hans":`通过 launchd 每天、每周或每月。像 Docker 这类有状态的工具会被特意排除在自动清理之外。`,"zh-Hant":`透過 launchd 每天、每週或每月。像 Docker 這類有狀態的工具會被特意排除在自動清理之外。`,th:`รายวัน รายสัปดาห์ หรือรายเดือนผ่าน launchd เครื่องมือที่มีสถานะอย่าง Docker ถูกกันออกจากรอบอัตโนมัติโดยตั้งใจ`,vi:`Hằng ngày, hằng tuần hoặc hằng tháng qua launchd. Các công cụ có trạng thái như Docker được cố ý loại khỏi lượt tự động.`,it:`Ogni giorno, settimana o mese via launchd. Strumenti con stato come Docker restano fuori dal giro automatico, di proposito.`,fr:`Quotidien, hebdomadaire ou mensuel via launchd. Les outils à état comme Docker sont volontairement exclus du passage automatique.`,es:`Diaria, semanal o mensual con launchd. Herramientas con estado como Docker quedan fuera del paso automático a propósito.`,pt:`Diária, semanal ou mensal via launchd. Ferramentas com estado como o Docker ficam fora da passagem automática de propósito.`,hr:`Dnevno, tjedno ili mjesečno preko launchd-a. Alati sa stanjem poput Dockera namjerno ostaju izvan automatskog prolaza.`,de:`Täglich, wöchentlich oder monatlich per launchd. Zustandsbehaftete Tools wie Docker bleiben absichtlich aus der automatischen Runde.`,pl:`Codziennie, co tydzień lub co miesiąc przez launchd. Narzędzia stanowe jak Docker celowo pozostają poza automatycznym przebiegiem.`,id:`Harian, mingguan, atau bulanan via launchd. Alat stateful seperti Docker sengaja dikecualikan dari pembersihan otomatis.`},
+    f3h:{en:`Done-notifications`,ko:`완료 알림`,ja:`完了通知`,"zh-Hans":`完成通知`,"zh-Hant":`完成通知`,th:`แจ้งเตือนเมื่อเสร็จ`,vi:`Thông báo hoàn tất`,it:`Notifiche di completamento`,fr:`Notifications de fin`,es:`Notificaciones de fin`,pt:`Notificações de conclusão`,hr:`Obavijesti o završetku`,de:`Fertig-Benachrichtigungen`,pl:`Powiadomienia o zakończeniu`,id:`Notifikasi selesai`},
+    f3b:{en:`A system notification when a sweep finishes, with how much it freed — manual or scheduled, you always know.`,ko:`정리가 끝나면 회수량과 함께 시스템 알림 — 수동이든 예약이든 항상 알 수 있어요.`,ja:`整理が終わると回収量つきのシステム通知 — 手動でも予約でも、いつでも分かります。`,"zh-Hans":`清理结束时弹出系统通知并显示释放了多少 — 无论手动还是定时，你都清楚。`,"zh-Hant":`清理結束時彈出系統通知並顯示釋放了多少 — 無論手動還是定時，你都清楚。`,th:`เมื่อกวาดเสร็จจะมีการแจ้งเตือนระบบพร้อมบอกว่าคืนพื้นที่เท่าไร — ไม่ว่าจะแมนนวลหรือตั้งเวลา คุณรู้เสมอ`,vi:`Thông báo hệ thống khi quét xong, kèm dung lượng đã giải phóng — thủ công hay theo lịch, bạn luôn biết.`,it:`Una notifica di sistema a fine pulizia, con quanto ha liberato — manuale o pianificata, lo sai sempre.`,fr:`Une notification système en fin de balayage, avec l'espace libéré — manuel ou planifié, vous savez toujours.`,es:`Una notificación del sistema al terminar, con cuánto liberó — manual o programado, siempre lo sabes.`,pt:`Uma notificação do sistema ao terminar, com quanto liberou — manual ou agendado, você sempre sabe.`,hr:`Sistemska obavijest kad čišćenje završi, s oslobođenim prostorom — ručno ili zakazano, uvijek znaš.`,de:`Eine Systembenachrichtigung wenn ein Sweep endet, mit dem freigegebenen Speicher — manuell oder geplant, du weißt es immer.`,pl:`Systemowe powiadomienie po zakończeniu czyszczenia z informacją ile zwolniono — ręcznie czy zaplanowane, zawsze wiesz.`,id:`Notifikasi sistem saat pembersihan selesai, beserta berapa banyak yang dibebaskan — manual maupun terjadwal, kamu selalu tahu.`},
+    f4h:{en:`Protect list`,ko:`보호 목록`,ja:`保護リスト`,"zh-Hans":`保护列表`,"zh-Hant":`保護清單`,th:`รายการป้องกัน`,vi:`Danh sách bảo vệ`,it:`Lista protetti`,fr:`Liste protégée`,es:`Lista protegida`,pt:`Lista protegida`,hr:`Popis zaštite`,de:`Schutzliste`,pl:`Lista ochronna`,id:`Daftar perlindungan`},
+    f4b:{en:`Pin caches you never want swept. Protected items are skipped everywhere — manual, scheduled, and <code>all</code>.`,ko:`절대 비우기 싫은 캐시를 고정해요. 보호된 항목은 어디서든 건너뛰어요 — 수동·예약·<code>all</code> 전부.`,ja:`絶対に消したくないキャッシュを固定。保護した項目はどこでもスキップ — 手動・予約・<code>all</code> すべてで。`,"zh-Hans":`把绝不想清的缓存钉住。受保护项在任何地方都被跳过 — 手动、定时、<code>all</code> 全都。`,"zh-Hant":`把絕不想清的快取釘住。受保護項在任何地方都被跳過 — 手動、定時、<code>all</code> 全都。`,th:`ปักหมุดแคชที่ไม่อยากให้ถูกกวาดเด็ดขาด รายการที่ป้องกันจะถูกข้ามทุกที่ — แมนนวล ตั้งเวลา และ <code>all</code>`,vi:`Ghim những bộ nhớ đệm bạn không bao giờ muốn quét. Mục được bảo vệ bị bỏ qua ở mọi nơi — thủ công, theo lịch và <code>all</code>.`,it:`Fissa le cache che non vuoi mai spazzare. Gli elementi protetti vengono saltati ovunque — manuale, pianificato e <code>all</code>.`,fr:`Épinglez les caches à ne jamais balayer. Les éléments protégés sont ignorés partout — manuel, planifié et <code>all</code>.`,es:`Fija las cachés que nunca quieres barrer. Los elementos protegidos se omiten en todas partes — manual, programado y <code>all</code>.`,pt:`Fixe os caches que nunca quer varrer. Itens protegidos são ignorados em todo lugar — manual, agendado e <code>all</code>.`,hr:`Prikvači predmemorije koje nikad ne želiš pomesti. Zaštićene stavke preskaču se posvuda — ručno, zakazano i <code>all</code>.`,de:`Hefte Caches fest, die nie bereinigt werden sollen. Geschützte Einträge werden überall übersprungen — manuell, geplant und <code>all</code>.`,pl:`Przypnij cache'y, których nigdy nie chcesz czyścić. Chronione elementy są pomijane wszędzie — ręcznie, zaplanowane i <code>all</code>.`,id:`Sematkan cache yang tidak pernah ingin disapu. Item yang dilindungi dilewati di mana saja — manual, terjadwal, dan <code>all</code>.`},
+    f5h:{en:`Age filter`,ko:`나이 필터`,ja:`経過日数フィルタ`,"zh-Hans":`时间过滤`,"zh-Hant":`時間過濾`,th:`ตัวกรองอายุ`,vi:`Bộ lọc tuổi`,it:`Filtro per età`,fr:`Filtre d'ancienneté`,es:`Filtro por antigüedad`,pt:`Filtro por idade`,hr:`Filtar po starosti`,de:`Altersfilter`,pl:`Filtr według wieku`,id:`Filter usia`},
+    f5b:{en:`Only clear what's gone stale — keep caches younger than the window you set, sweep everything older.`,ko:`오래된 것만 비워요 — 설정한 기간보다 최근인 캐시는 남기고, 더 오래된 건 전부 쓸어요.`,ja:`古くなったものだけを掃除 — 設定した期間より新しいキャッシュは残し、それより古いものを一掃します。`,"zh-Hans":`只清理变旧的 — 比你设定时间更新的缓存保留，更旧的全部扫掉。`,"zh-Hant":`只清理變舊的 — 比你設定時間更新的快取保留，更舊的全部掃掉。`,th:`ล้างเฉพาะที่เก่าแล้ว — เก็บแคชที่ใหม่กว่าช่วงที่ตั้ง กวาดที่เก่ากว่าทั้งหมด`,vi:`Chỉ xóa thứ đã cũ — giữ bộ nhớ đệm mới hơn khoảng bạn đặt, quét sạch phần cũ hơn.`,it:`Pulisci solo ciò che è invecchiato — tieni le cache più recenti della soglia, spazza via tutto il resto.`,fr:`Ne videz que ce qui a vieilli — gardez les caches plus récents que le seuil, balayez le reste.`,es:`Limpia solo lo que envejeció — conserva cachés más nuevas que el umbral, barre lo más antiguo.`,pt:`Limpe só o que envelheceu — mantenha caches mais novos que o limite, varra o resto.`,hr:`Očisti samo ono što je zastarjelo — zadrži predmemorije novije od praga, pomete sve starije.`,de:`Nur veraltete Caches löschen — neuere als dein Zeitfenster behalten, alles ältere wegfegen.`,pl:`Czyść tylko to, co się przeterminowało — zachowaj cache'y młodsze niż ustawiony próg, zmiataj wszystko starsze.`,id:`Hanya bersihkan yang sudah basi — pertahankan cache yang lebih muda dari batas yang kamu set, sapu semua yang lebih tua.`},
+    f6h:{en:`15 languages`,ko:`15개 언어`,ja:`15言語`,"zh-Hans":`15 种语言`,"zh-Hant":`15 種語言`,th:`15 ภาษา`,vi:`15 ngôn ngữ`,it:`15 lingue`,fr:`15 langues`,es:`15 idiomas`,pt:`15 idiomas`,hr:`15 jezika`,de:`15 Sprachen`,pl:`15 języków`,id:`15 bahasa`},
+    f6b:{en:`Native UI in English, 한국어, 日本語, 中文, and 11 more — picked up from your system, switchable on the fly.`,ko:`영어, 한국어, 日本語, 中文 외 11개 언어의 네이티브 UI — 시스템에서 자동 감지, 즉시 전환 가능.`,ja:`英語、한국어、日本語、中文 ほか11言語のネイティブ UI — システムから自動取得、その場で切替可能。`,"zh-Hans":`英语、한국어、日本語、中文 等共 15 种语言的原生界面 — 从系统自动识别，可即时切换。`,"zh-Hant":`英語、한국어、日本語、中文 等共 15 種語言的原生介面 — 從系統自動辨識，可即時切換。`,th:`UI เนทีฟในภาษาอังกฤษ, 한국어, 日本語, 中文 และอีก 11 ภาษา — ตรวจจับจากระบบ สลับได้ทันที`,vi:`Giao diện gốc bằng tiếng Anh, 한국어, 日本語, 中文 và 11 thứ tiếng khác — nhận từ hệ thống, đổi tức thì.`,it:`UI nativa in inglese, 한국어, 日本語, 中文 e altre 11 — rilevata dal sistema, cambiabile al volo.`,fr:`Interface native en anglais, 한국어, 日本語, 中文 et 11 autres — détectée depuis le système, changeable à la volée.`,es:`UI nativa en inglés, 한국어, 日本語, 中文 y 11 más — detectada del sistema, cambiable al instante.`,pt:`UI nativa em inglês, 한국어, 日本語, 中文 e mais 11 — detectada do sistema, troca na hora.`,hr:`Izvorni UI na engleskom, 한국어, 日本語, 中文 i još 11 — prepoznaje iz sustava, mijenja se u trenu.`,de:`Native UI in Englisch, 한국어, 日本語, 中文 und 11 weiteren — automatisch erkannt, jederzeit umschaltbar.`,pl:`Natywny UI po angielsku, 한국어, 日本語, 中文 i w 11 innych — wykrywany z systemu, przełączalny w locie.`,id:`UI native dalam bahasa Inggris, 한국어, 日本語, 中文, dan 11 lainnya — terdeteksi dari sistem, bisa diganti kapan saja.`},
+    bdgSafe:{en:`Safe`,ko:`안전`,ja:`安全`,"zh-Hans":`安全`,"zh-Hant":`安全`,th:`ปลอดภัย`,vi:`An toàn`,it:`Sicuro`,fr:`Sûr`,es:`Seguro`,pt:`Seguro`,hr:`Sigurno`,de:`Sicher`,pl:`Bezpieczny`,id:`Aman`},
+    bdgMid:{en:`Mid cost`,ko:`중비용`,ja:`中コスト`,"zh-Hans":`中等成本`,"zh-Hant":`中等成本`,th:`ต้นทุนกลาง`,vi:`Chi phí vừa`,it:`Costo medio`,fr:`Coût moyen`,es:`Costo medio`,pt:`Custo médio`,hr:`Srednji trošak`,de:`Mittlere Kosten`,pl:`Średni koszt`,id:`Biaya sedang`},
+    bdgCaution:{en:`Caution`,ko:`주의`,ja:`注意`,"zh-Hans":`注意`,"zh-Hant":`注意`,th:`ระวัง`,vi:`Thận trọng`,it:`Attenzione`,fr:`Attention`,es:`Precaución`,pt:`Cuidado`,hr:`Oprez`,de:`Vorsicht`,pl:`Ostrożnie`,id:`Hati-hati`},
+    bdgHeavy:{en:`Heavy`,ko:`무거움`,ja:`重い`,"zh-Hans":`较大`,"zh-Hant":`較大`,th:`หนัก`,vi:`Nặng`,it:`Pesante`,fr:`Lourd`,es:`Pesado`,pt:`Pesado`,hr:`Veliko`,de:`Schwer`,pl:`Ciężki`,id:`Berat`},
+
+    catsKicker:{en:`31 categories`,ko:`31개 카테고리`,ja:`31 カテゴリ`,"zh-Hans":`31 个类别`,"zh-Hant":`31 個類別`,th:`31 ประเภท`,vi:`31 loại`,it:`31 categorie`,fr:`31 catégories`,es:`31 categorías`,pt:`31 categorias`,hr:`31 kategorija`,de:`31 Kategorien`,pl:`31 kategorii`,id:`31 kategori`},
+    catsHead:{en:`If your toolchain made it, DevSweep probably knows it.`,ko:`당신의 툴체인이 만든 거라면, DevSweep이 알 거예요.`,ja:`あなたのツールチェーンが作ったものなら、DevSweep はたぶん知っています。`,"zh-Hans":`只要是你的工具链生成的，DevSweep 多半认得。`,"zh-Hant":`只要是你的工具鏈產生的，DevSweep 多半認得。`,th:`ถ้าทูลเชนของคุณสร้างมัน DevSweep ก็น่าจะรู้จัก`,vi:`Nếu bộ công cụ của bạn tạo ra nó, DevSweep gần như chắc chắn biết.`,it:`Se la tua toolchain l'ha creato, DevSweep probabilmente lo conosce.`,fr:`Si votre chaîne d'outils l'a créé, DevSweep le connaît sans doute.`,es:`Si tu toolchain lo creó, DevSweep probablemente lo conoce.`,pt:`Se sua toolchain criou, o DevSweep provavelmente conhece.`,hr:`Ako ga je tvoj toolchain stvorio, DevSweep ga vjerojatno poznaje.`,de:`Was deine Toolchain erzeugt hat, kennt DevSweep wahrscheinlich.`,pl:`Jeśli twój toolchain to stworzył, DevSweep prawdopodobnie to zna.`,id:`Jika toolchain kamu membuatnya, DevSweep kemungkinan besar sudah mengenalnya.`},
+    catsLead:{en:`Package managers, build systems, IDE indexes, container runtimes, and AI tooling — each with its own safe path list and native cleaner.`,ko:`패키지 매니저, 빌드 시스템, IDE 인덱스, 컨테이너 런타임, AI 툴까지 — 각각 자체 안전 경로 목록과 네이티브 정리 명령을 가져요.`,ja:`パッケージマネージャ、ビルドシステム、IDE インデックス、コンテナランタイム、AI ツールまで — それぞれ専用の安全パスとネイティブ整理を備えます。`,"zh-Hans":`包管理器、构建系统、IDE 索引、容器运行时，乃至 AI 工具 — 各有自己的安全路径清单和原生清理命令。`,"zh-Hant":`套件管理器、建置系統、IDE 索引、容器執行階段，乃至 AI 工具 — 各有自己的安全路徑清單和原生清理指令。`,th:`ตัวจัดการแพ็กเกจ ระบบบิลด์ ดัชนี IDE คอนเทนเนอร์รันไทม์ และเครื่องมือ AI — แต่ละอย่างมีรายการพาธปลอดภัยและตัวล้างเนทีฟของตัวเอง`,vi:`Trình quản lý gói, hệ thống build, chỉ mục IDE, runtime container và công cụ AI — mỗi thứ có danh sách đường dẫn an toàn và trình dọn gốc riêng.`,it:`Gestori di pacchetti, build system, indici IDE, runtime di container e strumenti AI — ognuno con la propria lista di percorsi sicuri e pulitore nativo.`,fr:`Gestionnaires de paquets, systèmes de build, index d'IDE, runtimes de conteneurs et outils d'IA — chacun avec sa liste de chemins sûrs et son nettoyeur natif.`,es:`Gestores de paquetes, sistemas de build, índices de IDE, runtimes de contenedores y herramientas de IA — cada uno con su lista de rutas seguras y limpiador nativo.`,pt:`Gerenciadores de pacotes, sistemas de build, índices de IDE, runtimes de contêiner e ferramentas de IA — cada um com sua lista de caminhos seguros e limpador nativo.`,hr:`Upravitelji paketa, build sustavi, IDE indeksi, kontejnerski runtimei i AI alati — svaki sa svojim popisom sigurnih putanja i izvornim čistačem.`,de:`Paketmanager, Build-Systeme, IDE-Indizes, Container-Runtimes und KI-Tools — jedes mit eigenem sicheren Pfadliste und nativem Cleaner.`,pl:`Menedżery pakietów, systemy budowania, indeksy IDE, środowiska uruchomieniowe kontenerów i narzędzia AI — każde z własną listą bezpiecznych ścieżek i natywnym cleanerem.`,id:`Manajer paket, sistem build, indeks IDE, runtime kontainer, dan alat AI — masing-masing dengan daftar path aman dan pembersih native sendiri.`},
+    catsNote:{en:`<span class="hd"></span> dashed = heavy — costly to re-download, so excluded from the default sweep and only cleared on request.`,ko:`<span class="hd"></span> 점선 = heavy — 재다운로드 비용이 커서 기본 정리에서 빠지고, 직접 지정할 때만 정리돼요.`,ja:`<span class="hd"></span> 破線 = heavy — 再ダウンロードのコストが大きく、既定の整理から除外。指定時のみ整理。`,"zh-Hans":`<span class="hd"></span> 虚线 = heavy — 重新下载代价高，因此排除在默认清理外，仅在指定时清理。`,"zh-Hant":`<span class="hd"></span> 虛線 = heavy — 重新下載代價高，因此排除在預設清理外，僅在指定時清理。`,th:`<span class="hd"></span> เส้นประ = heavy — ดาวน์โหลดใหม่แพง จึงไม่อยู่ในการกวาดปริยาย และล้างเฉพาะเมื่อสั่ง`,vi:`<span class="hd"></span> nét đứt = heavy — tốn công tải lại, nên bị loại khỏi lượt quét mặc định và chỉ xóa khi yêu cầu.`,it:`<span class="hd"></span> tratteggio = heavy — costoso da riscaricare, quindi escluso dalla pulizia predefinita e rimosso solo su richiesta.`,fr:`<span class="hd"></span> pointillé = heavy — coûteux à retélécharger, donc exclu du balayage par défaut et nettoyé uniquement sur demande.`,es:`<span class="hd"></span> discontinuo = heavy — costoso de redescargar, por eso se excluye del barrido por defecto y solo se limpia a petición.`,pt:`<span class="hd"></span> tracejado = heavy — caro de rebaixar, então fica fora da varredura padrão e só é limpo sob pedido.`,hr:`<span class="hd"></span> crtkano = heavy — skupo za ponovno preuzimanje, pa je izvan zadanog čišćenja i briše se samo na zahtjev.`,de:`<span class="hd"></span> gestrichelt = heavy — teuer erneut herunterzuladen, daher aus dem Standard-Sweep ausgeschlossen und nur auf Anfrage gelöscht.`,pl:`<span class="hd"></span> przerywana = heavy — kosztowna do ponownego pobrania, wykluczona z domyślnego czyszczenia i usuwana tylko na żądanie.`,id:`<span class="hd"></span> garis putus = heavy — mahal untuk diunduh ulang, sehingga dikecualikan dari pembersihan default dan hanya dihapus atas permintaan.`},
+
+    dlHead:{en:`Get your gigabytes <span class="accent">back.</span>`,ko:`기가바이트를 <span class="accent">되찾으세요.</span>`,ja:`ギガバイトを<span class="accent">取り戻そう。</span>`,"zh-Hans":`把你的硬盘空间<span class="accent">拿回来。</span>`,"zh-Hant":`把你的硬碟空間<span class="accent">拿回來。</span>`,th:`เอาพื้นที่กิกะไบต์<span class="accent">คืนมา</span>`,vi:`Lấy lại <span class="accent">gigabyte của bạn.</span>`,it:`Riprenditi i tuoi <span class="accent">gigabyte.</span>`,fr:`Récupérez vos <span class="accent">gigaoctets.</span>`,es:`Recupera tus <span class="accent">gigas.</span>`,pt:`Recupere seus <span class="accent">gigabytes.</span>`,hr:`Vrati svoje <span class="accent">gigabajte.</span>`,de:`Hol dir deine Gigabytes <span class="accent">zurück.</span>`,pl:`Odzyskaj swoje <span class="accent">gigabajty.</span>`,id:`Ambil kembali <span class="accent">gigabyte-mu.</span>`},
+    dlSub:{en:`Free, open source, and built with zero dependencies — a single <code style="font-family:var(--font-mono)">swiftc</code> build over a readable bash core.`,ko:`무료·오픈소스·의존성 0 — 읽기 쉬운 bash 코어 위에 <code style="font-family:var(--font-mono)">swiftc</code> 단일 빌드.`,ja:`無料・オープンソース・依存ゼロ — 読みやすい bash コアの上に <code style="font-family:var(--font-mono)">swiftc</code> 単一ビルド。`,"zh-Hans":`免费、开源、零依赖 — 在可读的 bash 内核之上，一次 <code style="font-family:var(--font-mono)">swiftc</code> 构建。`,"zh-Hant":`免費、開源、零依賴 — 在可讀的 bash 核心之上，一次 <code style="font-family:var(--font-mono)">swiftc</code> 建置。`,th:`ฟรี โอเพนซอร์ส ไม่มี dependency — บิลด์ <code style="font-family:var(--font-mono)">swiftc</code> เดียวบนแกน bash ที่อ่านง่าย`,vi:`Miễn phí, mã nguồn mở, không phụ thuộc — một bản build <code style="font-family:var(--font-mono)">swiftc</code> duy nhất trên lõi bash dễ đọc.`,it:`Gratis, open source, zero dipendenze — una singola build <code style="font-family:var(--font-mono)">swiftc</code> su un core bash leggibile.`,fr:`Gratuit, open source, zéro dépendance — une seule build <code style="font-family:var(--font-mono)">swiftc</code> sur un cœur bash lisible.`,es:`Gratis, open source, cero dependencias — una sola build <code style="font-family:var(--font-mono)">swiftc</code> sobre un núcleo bash legible.`,pt:`Grátis, open source, zero dependências — uma única build <code style="font-family:var(--font-mono)">swiftc</code> sobre um núcleo bash legível.`,hr:`Besplatno, otvoreni kod, bez ovisnosti — jedna <code style="font-family:var(--font-mono)">swiftc</code> izgradnja nad čitljivom bash jezgrom.`,de:`Kostenlos, Open Source, null Abhängigkeiten — ein einziger <code style="font-family:var(--font-mono)">swiftc</code>-Build über einem lesbaren Bash-Kern.`,pl:`Darmowy, open source, zero zależności — jeden build <code style="font-family:var(--font-mono)">swiftc</code> nad czytelnym rdzeniem bash.`,id:`Gratis, open source, tanpa dependensi — satu build <code style="font-family:var(--font-mono)">swiftc</code> di atas inti bash yang mudah dibaca.`},
+    dlCta:{en:`Download for macOS`,ko:`macOS용 다운로드`,ja:`macOS 版をダウンロード`,"zh-Hans":`下载 macOS 版`,"zh-Hant":`下載 macOS 版`,th:`ดาวน์โหลดสำหรับ macOS`,vi:`Tải về cho macOS`,it:`Scarica per macOS`,fr:`Télécharger pour macOS`,es:`Descargar para macOS`,pt:`Baixar para macOS`,hr:`Preuzmi za macOS`,de:`Für macOS laden`,pl:`Pobierz na macOS`,id:`Unduh untuk macOS`},
+    dlSource:{en:`Read the source`,ko:`소스 보기`,ja:`ソースを見る`,"zh-Hans":`阅读源码`,"zh-Hant":`閱讀原始碼`,th:`อ่านซอร์ส`,vi:`Đọc mã nguồn`,it:`Leggi il sorgente`,fr:`Lire le code`,es:`Ver el código`,pt:`Ler o código`,hr:`Pročitaj kod`,de:`Quellcode lesen`,pl:`Przeczytaj kod`,id:`Baca kode sumber`},
+    dlFine:{en:`macOS 14+ · Apple Silicon · v0.1.0 · unsigned build — right-click → Open on first launch`,ko:`macOS 14+ · Apple Silicon · v0.1.0 · 미서명 빌드 — 첫 실행은 우클릭 → 열기`,ja:`macOS 14+ · Apple Silicon · v0.1.0 · 未署名ビルド — 初回は右クリック→開く`,"zh-Hans":`macOS 14+ · Apple Silicon · v0.1.0 · 未签名构建 — 首次右键 → 打开`,"zh-Hant":`macOS 14+ · Apple Silicon · v0.1.0 · 未簽署版本 — 首次右鍵 → 開啟`,th:`macOS 14+ · Apple Silicon · v0.1.0 · บิลด์ไม่ได้เซ็น — เปิดครั้งแรกคลิกขวา → Open`,vi:`macOS 14+ · Apple Silicon · v0.1.0 · bản chưa ký — lần đầu chuột phải → Open`,it:`macOS 14+ · Apple Silicon · v0.1.0 · build non firmata — primo avvio: clic destro → Apri`,fr:`macOS 14+ · Apple Silicon · v0.1.0 · build non signée — premier lancement : clic droit → Ouvrir`,es:`macOS 14+ · Apple Silicon · v0.1.0 · build sin firmar — primer inicio: clic derecho → Abrir`,pt:`macOS 14+ · Apple Silicon · v0.1.0 · build não assinada — primeira vez: clique direito → Abrir`,hr:`macOS 14+ · Apple Silicon · v0.1.0 · nepotpisana gradnja — prvo pokretanje: desni klik → Otvori`,de:`macOS 14+ · Apple Silicon · v0.1.0 · unsignierter Build — beim ersten Start: Rechtsklick → Öffnen`,pl:`macOS 14+ · Apple Silicon · v0.1.0 · build bez podpisu — pierwsze uruchomienie: kliknij prawym → Otwórz`,id:`macOS 14+ · Apple Silicon · v0.1.0 · build tidak ditandatangani — pertama kali: klik kanan → Buka`}
+  };
+
+  var LANGS=[["en","English"],["ko","한국어"],["ja","日本語"],["zh-Hans","简体中文"],["zh-Hant","繁體中文"],["th","ไทย"],["vi","Tiếng Việt"],["it","Italiano"],["fr","Français"],["es","Español"],["pt","Português"],["hr","Hrvatski"],["de","Deutsch"],["pl","Polski"],["id","Bahasa Indonesia"]];
+
+  // mirrors AppLanguage.systemDefault
+  function pick(){
+    var s=null; try{s=localStorage.getItem("ds-lang");}catch(e){}
+    if(s) return s;
+    var p=((navigator.languages&&navigator.languages[0])||navigator.language||"en").toLowerCase();
+    if(p.indexOf("ko")===0)return"ko";
+    if(p.indexOf("ja")===0)return"ja";
+    if(p.indexOf("zh-hant")===0||p.indexOf("zh-tw")===0||p.indexOf("zh-hk")===0||p.indexOf("zh-mo")===0)return"zh-Hant";
+    if(p.indexOf("zh")===0)return"zh-Hans";
+    if(p.indexOf("th")===0)return"th";
+    if(p.indexOf("vi")===0)return"vi";
+    if(p.indexOf("it")===0)return"it";
+    if(p.indexOf("fr")===0)return"fr";
+    if(p.indexOf("es")===0)return"es";
+    if(p.indexOf("pt")===0)return"pt";
+    if(p.indexOf("hr")===0)return"hr";
+    if(p.indexOf("de")===0)return"de";
+    if(p.indexOf("pl")===0)return"pl";
+    if(p.indexOf("id")===0)return"id";
+    return"en";
+  }
+  function apply(L){
+    document.documentElement.setAttribute("lang",L);
+    document.querySelectorAll("[data-i18n]").forEach(function(el){
+      var e=DICT[el.getAttribute("data-i18n")]; if(!e) return;
+      el.innerHTML=e[L]||e.en;
+    });
+  }
+  var sel=document.getElementById("lang");
+  if(sel){
+    LANGS.forEach(function(l){var o=document.createElement("option");o.value=l[0];o.textContent=l[1];sel.appendChild(o);});
+    var cur=pick(); sel.value=cur; apply(cur);
+    sel.addEventListener("change",function(){ try{localStorage.setItem("ds-lang",sel.value);}catch(e){} apply(sel.value); });
+  }
+})();
+</script>
+</body>
+</html>
