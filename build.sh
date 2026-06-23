@@ -37,7 +37,7 @@ cp "$ROOT/Resources/icons/"*.svg "$APP/Contents/Resources/icons/"
 
 # 3b) 지원 언어 선언용 빈 .lproj — AppKit 표준 메뉴(File/Edit/Window/Help…)를 시스템 언어로 번역
 echo "  · 로컬라이제이션 .lproj 생성"
-for lang in en ko ja zh-Hans zh-Hant th vi it fr es pt hr; do
+for lang in en ko ja zh-Hans zh-Hant th vi it fr es pt hr de pl id; do
   mkdir -p "$APP/Contents/Resources/$lang.lproj"
   : > "$APP/Contents/Resources/$lang.lproj/Localizable.strings"
 done

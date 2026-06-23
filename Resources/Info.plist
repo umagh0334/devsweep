@@ -40,6 +40,9 @@
         <string>es</string>
         <string>pt</string>
         <string>hr</string>
+        <string>de</string>
+        <string>pl</string>
+        <string>id</string>
     </array>
     <key>NSQuitAlwaysKeepsWindows</key>
     <false/>
