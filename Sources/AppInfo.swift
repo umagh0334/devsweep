@@ -7,7 +7,7 @@ enum AppInfo {
     static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
     }
-    static let author  = "Wyatt"
+    static let author  = "umagh0334"
     static let license = "MIT License"
 
     static let repoOwner = "umagh0334"    // 개인 GitHub 계정
