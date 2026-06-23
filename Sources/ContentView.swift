@@ -1,10 +1,21 @@
 import SwiftUI
 import AppKit
 
+/// 정리 확인 모달 요청. targets=nil 이면 선택 전체, 값 있으면 그 카테고리만.
+struct CleanRequest: Identifiable, Equatable {
+    let id = UUID()
+    let targets: [String]?
+    let title: String        // 단일이면 카테고리명
+    let count: Int
+    let sizeKB: Int
+    let hasHeavy: Bool
+    let isSingle: Bool
+}
+
 struct ContentView: View {
     let engine: Engine
     @State private var selectedDetail: String?
-    @State private var confirmCleanAll = false
+    @State private var cleanRequest: CleanRequest?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.appLanguage) private var lang
     @AppStorage("autoScan") private var autoScan = true
@@ -14,12 +25,6 @@ struct ContentView: View {
     private var selectedKB: Int { engine.categories.filter(\.selected).reduce(0) { $0 + $1.sizeKB } }
     private var selectedCount: Int { engine.categories.filter(\.selected).count }
     private var selectedHasHeavy: Bool { engine.categories.contains { $0.selected && $0.heavy } }
-    /// 정리 확인 다이얼로그 본문 — 항목 수·예상 회수 용량(+heavy 포함 경고)
-    private var confirmAllMessage: String {
-        var s = tr("confirm.messageFmt", lang, selectedCount, humanKB(selectedKB))
-        if selectedHasHeavy { s += "\n" + tr("confirm.heavyWarn", lang) }
-        return s
-    }
     /// 정리 가능(용량 있음 + 보호 안 됨), 용량 내림차순 — 분포 바·색·자동선택의 기준
     private var ranked: [CacheCategory] { engine.categories.filter { $0.hasSize && !$0.protected }.sorted { $0.sizeKB > $1.sizeKB } }
 
@@ -36,6 +41,8 @@ struct ContentView: View {
             footer
         }
         .frame(width: 900, height: 620)
+        .overlay { cleanConfirmOverlay }
+        .animation(.snappy(duration: 0.22), value: cleanRequest)
         .tint(Theme.sweep)
         .onAppear {
             // 매 실행 화면 중앙 (복원된 위치를 덮어씀). .background(NSView)는 윈도우 생성을 깨므로 onAppear 사용.
@@ -125,29 +132,59 @@ struct ContentView: View {
         let active = ranked
         let protectedItems = engine.categories.filter(\.protected)
         let empty = engine.categories.filter { !$0.hasSize && !$0.protected }
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 3) {
-                    if active.isEmpty && olderThanDays > 0 && !engine.categories.isEmpty {
-                        filterEmptyBanner
+        return VStack(spacing: 0) {
+            if !engine.categories.isEmpty { selectionBar(selectable: active) }
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        if active.isEmpty && olderThanDays > 0 && !engine.categories.isEmpty {
+                            filterEmptyBanner
+                        }
+                        ForEach(active) { row($0) }
+                        if !protectedItems.isEmpty {
+                            groupHeader(tr("badge.protected", lang), protectedItems.count, icon: "lock.fill")
+                            ForEach(protectedItems) { row($0) }
+                        }
+                        if !empty.isEmpty {
+                            groupHeader(tr("master.empty", lang), empty.count)
+                            ForEach(empty) { row($0) }
+                        }
                     }
-                    ForEach(active) { row($0) }
-                    if !protectedItems.isEmpty {
-                        groupHeader(tr("badge.protected", lang), protectedItems.count, icon: "lock.fill")
-                        ForEach(protectedItems) { row($0) }
-                    }
-                    if !empty.isEmpty {
-                        groupHeader(tr("master.empty", lang), empty.count)
-                        ForEach(empty) { row($0) }
-                    }
+                    .padding(8)
                 }
-                .padding(8)
-            }
-            .scrollContentBackground(.hidden)
-            .onChange(of: selectedDetail) { _, new in
-                if let n = new { withAnimation(.snappy) { proxy.scrollTo(n) } }
+                .scrollContentBackground(.hidden)
+                .onChange(of: selectedDetail) { _, new in
+                    if let n = new { withAnimation(.snappy) { proxy.scrollTo(n) } }
+                }
             }
         }
+    }
+
+    /// 마스터 리스트 상단 바: 전체 선택/해제 토글 + 선택 카운트(선택수 / 정리가능 수).
+    /// allOn 은 현재 정리가능 항목이 전부 선택됐는지에서 파생 — 별도 상태 없이 재스캔에도 정확.
+    private func selectionBar(selectable: [CacheCategory]) -> some View {
+        let allOn = !selectable.isEmpty && selectable.allSatisfy(\.selected)
+        return HStack(spacing: 8) {
+            Button { engine.setAllSelected(!allOn) } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: allOn ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(allOn ? AnyShapeStyle(Theme.sweep) : AnyShapeStyle(.secondary))
+                    Text(allOn ? tr("select.none", lang) : tr("select.all", lang))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(selectable.isEmpty)
+            Spacer()
+            if !selectable.isEmpty {
+                Text("\(selectedCount) / \(selectable.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 7)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private func row(_ cat: CacheCategory) -> some View {
@@ -195,7 +232,10 @@ struct ContentView: View {
     private var detailPanel: some View {
         Group {
             if let name = selectedDetail, let cat = engine.categories.first(where: { $0.name == name }) {
-                DetailPanel(cat: cat, rank: rank(of: name), engine: engine).id(name)
+                DetailPanel(cat: cat, rank: rank(of: name), engine: engine, onRequestClean: {
+                    cleanRequest = CleanRequest(targets: [cat.name], title: cat.name, count: 1,
+                                                sizeKB: cat.sizeKB, hasHeavy: cat.heavy, isSingle: true)
+                }).id(name)
             } else {
                 VStack(spacing: 10) {
                     Icons.view("broom", size: 38).foregroundStyle(.tertiary)
@@ -218,7 +258,7 @@ struct ContentView: View {
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 16).padding(.vertical, 9)
-        .background(Theme.heavy)
+        .background(Theme.danger)
     }
 
     // ── 푸터: 선택 요약 · 액션 ──
@@ -243,20 +283,87 @@ struct ContentView: View {
                 HStack(spacing: 5) { Icons.view("refresh", size: 12); Text(tr("footer.rescan", lang)) }
             }
             .disabled(engine.isScanning || engine.isCleaning)
-            Button { confirmCleanAll = true } label: {
+            Button {
+                cleanRequest = CleanRequest(targets: nil, title: "", count: selectedCount,
+                                            sizeKB: selectedKB, hasHeavy: selectedHasHeavy, isSingle: false)
+            } label: {
                 HStack(spacing: 5) { Icons.view("trash", size: 12); Text(tr("footer.clean", lang)) }
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(selectedCount == 0 || engine.isCleaning || engine.isScanning)
-            .confirmationDialog(tr("confirm.title", lang), isPresented: $confirmCleanAll, titleVisibility: .visible) {
-                Button(tr("confirm.clean", lang), role: .destructive) { Task { await engine.clean() } }
-                Button(tr("confirm.cancel", lang), role: .cancel) {}
-            } message: { Text(confirmAllMessage) }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.regularMaterial)
         .overlay(alignment: .top) { Divider() }
+    }
+
+    // ── 커스텀 정리 확인 모달 (시스템 다이얼로그 대체) ──
+
+    @ViewBuilder private var cleanConfirmOverlay: some View {
+        if let req = cleanRequest {
+            ZStack {
+                Rectangle().fill(.black.opacity(0.32)).ignoresSafeArea()
+                    .onTapGesture { cleanRequest = nil }   // 바깥 탭 = 취소
+                cleanCard(req)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
+    }
+
+    private func cleanCard(_ req: CleanRequest) -> some View {
+        let accent = req.hasHeavy ? Theme.heavy : Theme.sweep
+        return VStack(spacing: 0) {
+            ZStack {
+                Circle().fill(accent.opacity(0.15)).frame(width: 62, height: 62)
+                Icons.view("trash", size: 27).foregroundStyle(accent)
+            }
+            .padding(.top, 26)
+            Text(tr("confirm.title", lang))
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .padding(.top, 14)
+            Text(humanKB(req.sizeKB))
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .foregroundStyle(req.hasHeavy ? Color.primary : accent)   // 앰버는 글자 대비가 약해 heavy 시 primary
+                .contentTransition(.numericText())
+                .padding(.top, 6)
+            Text(req.isSingle ? tr("confirm.oneSubFmt", lang, req.title)
+                              : tr("confirm.allSubFmt", lang, req.count))
+                .font(.callout).foregroundStyle(.secondary).padding(.top, 1)
+            if req.hasHeavy {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11))
+                        .foregroundStyle(Theme.heavy)                      // 색 신호는 아이콘이 담당
+                    Text(tr("confirm.heavyWarn", lang))
+                        .font(.caption).foregroundStyle(.primary)          // 글자는 또렷하게
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 11).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Theme.heavy.opacity(0.15)))
+                .padding(.horizontal, 22).padding(.top, 16)
+            }
+            HStack(spacing: 10) {
+                Button { cleanRequest = nil } label: {
+                    Text(tr("confirm.cancel", lang)).frame(maxWidth: .infinity)
+                }
+                .controlSize(.large).buttonStyle(.bordered).keyboardShortcut(.cancelAction)
+                Button { runClean(req) } label: {
+                    Text(tr("confirm.clean", lang)).frame(maxWidth: .infinity).fontWeight(.semibold)
+                }
+                .controlSize(.large).buttonStyle(.borderedProminent).tint(accent)
+            }
+            .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 22)
+        }
+        .frame(width: 340)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.regularMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 28, y: 10)
+    }
+
+    private func runClean(_ req: CleanRequest) {
+        cleanRequest = nil
+        Task { await engine.clean(targets: req.targets) }
     }
 }
 
@@ -343,8 +450,8 @@ struct DetailPanel: View {
     let cat: CacheCategory
     let rank: Int?
     let engine: Engine
+    let onRequestClean: () -> Void
     @Environment(\.appLanguage) private var lang
-    @State private var confirmClean = false
 
     private var detail: CategoryDetail? { engine.detailCache[cat.name] }
     private var loading: Bool { engine.loadingDetails.contains(cat.name) }
@@ -415,12 +522,13 @@ struct DetailPanel: View {
 
     private func badgeRow(_ d: CategoryDetail) -> some View {
         HStack(spacing: 6) {
+            // 위험도 신호등: 틸(안전·저) → 슬레이트(중립·중) → 빨강(주의·고). heavy(블루)는 위험도와 별개 속성.
             if d.protected { badge(tr("badge.protected", lang), icon: "hand.raised.fill", color: Theme.guardTone) }
             badge(tr(d.safety == "caution" ? "badge.caution" : "badge.safe", lang),
-                  icon: d.safetyIcon, color: d.safety == "caution" ? Theme.heavy : Theme.sweep)
+                  icon: d.safetyIcon, color: d.safety == "caution" ? Theme.danger : Theme.sweep)
             badge(tr("cost.\(costKey(d.regenCost))", lang), icon: "arrow.clockwise",
-                  color: d.regenCost == "high" ? Theme.heavy : (d.regenCost == "low" ? Theme.sweep : Theme.guardTone))
-            if d.needsTCC { badge(tr("badge.tcc", lang), icon: "lock.fill", color: Theme.heavy) }
+                  color: d.regenCost == "high" ? Theme.danger : (d.regenCost == "low" ? Theme.sweep : Theme.guardTone))
+            if d.needsTCC { badge(tr("badge.tcc", lang), icon: "lock.fill", color: Theme.guardTone) }
             if !d.nativeAvailable { badge(tr("badge.noTool", lang), icon: "wrench.adjustable", color: Theme.guardTone) }
             Spacer()
         }
@@ -495,19 +603,11 @@ struct DetailPanel: View {
             Text(tr("detail.cleanThisInfoFmt", lang, cat.sizeHuman))
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
-            Button { confirmClean = true } label: {
+            Button { onRequestClean() } label: {
                 HStack(spacing: 5) { Icons.view("trash", size: 12); Text(tr("detail.cleanThis", lang)) }
             }
             .buttonStyle(.borderedProminent)
             .disabled(engine.isCleaning || engine.isScanning)
-            .confirmationDialog(tr("confirm.title", lang), isPresented: $confirmClean, titleVisibility: .visible) {
-                Button(tr("confirm.clean", lang), role: .destructive) { Task { await engine.clean(targets: [cat.name]) } }
-                Button(tr("confirm.cancel", lang), role: .cancel) {}
-            } message: {
-                Text(cat.heavy
-                     ? tr("confirm.oneMessageFmt", lang, cat.name, cat.sizeHuman) + "\n" + tr("confirm.heavyWarn", lang)
-                     : tr("confirm.oneMessageFmt", lang, cat.name, cat.sizeHuman))
-            }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.regularMaterial)

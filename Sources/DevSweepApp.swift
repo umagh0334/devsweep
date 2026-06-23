@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct DevSweepApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate   // 알림 권한·포그라운드 배너
     /// 메인 창과 환경설정 창이 같은 Engine 을 공유 (보호 토글 → 메인 즉시 반영)
     @State private var engine = Engine()
     @Environment(\.scenePhase) private var scenePhase

@@ -89,6 +89,10 @@ final class Engine {
             lastLog = try await run([path, "clean", "--yes"] + names + ageArgs)
             let prev = UserDefaults.standard.integer(forKey: "totalReclaimedKB")
             UserDefaults.standard.set(prev + freedKB, forKey: "totalReclaimedKB")
+            // 성공(throw 안 된 경로)에서만 알림 — 설정 토글 기본 ON
+            if UserDefaults.standard.object(forKey: "notifyOnClean") as? Bool ?? true {
+                Notifier.cleanDone(reclaimedKB: freedKB)
+            }
         } catch {
             errorMessage = "정리 실패: \(error.localizedDescription)"
         }
@@ -99,6 +103,14 @@ final class Engine {
     /// 카테고리 선택(정리 대상) 토글 — 마스터 행 체크박스용 (정렬과 무관하게 이름으로 갱신).
     func setSelected(_ name: String, _ value: Bool) {
         if let i = categories.firstIndex(where: { $0.name == name }) {
+            categories[i].selected = value
+        }
+    }
+
+    /// 전체 선택/해제 — 정리 가능(hasSize && !protected) 항목만 일괄 토글.
+    /// 0KB/보호 항목은 애초에 체크 불가라 건드리지 않아 선택 규칙(P1-3)과 일관.
+    func setAllSelected(_ value: Bool) {
+        for i in categories.indices where categories[i].hasSize && !categories[i].protected {
             categories[i].selected = value
         }
     }

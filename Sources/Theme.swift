@@ -5,8 +5,9 @@ import SwiftUI
 enum Theme {
     // ── 시맨틱 액센트 (라이트·다크 양쪽에서 또렷한 채도) ──
     static let sweep = Color(red: 0.10, green: 0.72, blue: 0.66)     // 틸-아쿠아: 정리·회수·선택
-    static let heavy = Color(red: 0.96, green: 0.62, blue: 0.26)     // 앰버: 재다운로드 비쌈
+    static let heavy = Color(red: 0.20, green: 0.48, blue: 0.92)     // 블루: 재다운로드 비쌈(heavy) — sweep 틸과 구분되는 남색기
     static let guardTone = Color(red: 0.56, green: 0.59, blue: 0.66) // 슬레이트: 보호
+    static let danger = Color(red: 0.89, green: 0.32, blue: 0.30)    // 레드: 에러·실패 (heavy와 분리 — 에러는 경고색 유지)
 
     // ── 분포 스택 바 팔레트 (용량순 세그먼트에 순환 배정) ──
     static let palette: [Color] = [

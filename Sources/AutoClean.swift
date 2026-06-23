@@ -77,6 +77,16 @@ enum AutoClean {
         # clean exit code 를 기록 — 실패면 freedKB:0/status:failed 로 남겨 reconcile 이 합산하지 않게.
         if "$ENGINE" clean --yes $AGE >>"$APPSUP/autoclean.run.log" 2>&1; then
           printf '{"ts":%s,"freedKB":%s,"status":"ok"}\\n' "$(date +%s)" "$est" >> "$STATE"
+          # 정리 완료 알림 — 앱 컨텍스트가 없어 osascript 사용(출처는 DevSweep 아님). notifyOnClean(앱 prefs) 연동, est>0 일 때만.
+          NOTIFY=$(defaults read com.wyatt.devsweep notifyOnClean 2>/dev/null || echo 1)
+          if [ "$NOTIFY" != "0" ] && [ "${est:-0}" -gt 0 ]; then
+            if [ "$est" -ge 1048576 ]; then esth="$(( est / 1048576 ))G"; elif [ "$est" -ge 1024 ]; then esth="$(( est / 1024 ))M"; else esth="${est}K"; fi
+            case "$(defaults read com.wyatt.devsweep language 2>/dev/null)" in
+              ko*) nbody="자동 정리 완료 · $esth 확보" ;;
+              *)   nbody="Auto-clean done · $esth freed" ;;
+            esac
+            osascript -e "display notification \\"$nbody\\" with title \\"DevSweep\\"" >/dev/null 2>&1 || true
+          fi
         else
           rc=$?
           printf '{"ts":%s,"freedKB":0,"status":"failed","code":%s}\\n' "$(date +%s)" "$rc" >> "$STATE"

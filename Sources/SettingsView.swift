@@ -94,6 +94,7 @@ struct GeneralSettings: View {
     @AppStorage("appearance") private var appearance = 0
     @AppStorage("autoScan") private var autoScan = true
     @AppStorage("selectHeavy") private var selectHeavy = false
+    @AppStorage("notifyOnClean") private var notifyOnClean = true
 
     var body: some View {
         Form {
@@ -125,6 +126,10 @@ struct GeneralSettings: View {
                     Text(tr("general.selectHeavyDesc", lang))
                 }
                 .onChange(of: selectHeavy) { _, _ in Task { await engine.scan() } }
+                Toggle(isOn: $notifyOnClean) {
+                    Text(tr("general.notify", lang))
+                    Text(tr("general.notifyDesc", lang))
+                }
             }
         }
         .formStyle(.grouped)
