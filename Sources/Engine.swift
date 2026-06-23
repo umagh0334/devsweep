@@ -15,6 +15,9 @@ final class Engine {
     /// 펼친 카테고리의 상세 정보 캐시 (lazy 로드). 정리/재스캔 후 무효화됨.
     var detailCache: [String: CategoryDetail] = [:]
     var loadingDetails: Set<String> = []
+    /// scan/clean 으로 detailCache 가 비워질 때마다 증가. 같은 항목이 선택된 상태에서도
+    /// DetailPanel 의 .task(id:) 를 재실행시켜 상세가 빈칸으로 남는 것을 방지한다.
+    var detailRevision = 0
 
     /// 앱 번들 Resources에 복사된 devsweep 스크립트 경로
     private var enginePath: String? {
@@ -43,12 +46,15 @@ final class Engine {
             let includeHeavy = UserDefaults.standard.bool(forKey: "selectHeavy")
             categories = decoded.map { item in
                 var c = item
+                // 신규 선택이든 기존 선택 보존이든 hasSize && !protected 를 강제 —
+                // 재스캔 후 0KB/보호로 바뀐 항목이 체크된 채 남아 카운트를 오염시키지 않게.
                 c.selected = keepSelected.isEmpty
                     ? ((includeHeavy || !item.heavy) && item.hasSize && !item.protected)
-                    : (keepSelected.contains(item.name) && !item.protected)
+                    : (keepSelected.contains(item.name) && item.hasSize && !item.protected)
                 return c
             }
             detailCache.removeAll()   // 용량이 갱신됐으니 stale 상세 무효화
+            detailRevision &+= 1      // 같은 항목 선택 상태에서도 상세 패널 재로드 트리거
         } catch {
             errorMessage = "스캔 실패: \(error.localizedDescription)"
         }
@@ -131,24 +137,51 @@ final class Engine {
     }
 
     /// /bin/bash 로 devsweep 실행, stdout 문자열을 반환. 동기 Process API를 async로 브리지.
+    /// 계약: exit≠0 이면 stderr 를 담아 throw → 호출부가 회수량 누적/디코드를 건너뛴다.
     private func run(_ args: [String]) async throws -> String {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: "/bin/bash")
                 proc.arguments = args
-                let outPipe = Pipe()
+                // GUI 앱은 launchd 환경이라 PATH 가 최소(/usr/bin:/bin…)라서 brew/npm/docker 등
+                // 네이티브 cleanup 명령을 못 찾는다. 자동정리 plist 와 동일하게 Homebrew 경로 보강.
+                var env = ProcessInfo.processInfo.environment
+                let base = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+                env["PATH"] = env["PATH"].map { "\(base):\($0)" } ?? base
+                proc.environment = env
+                let outPipe = Pipe(), errPipe = Pipe()
                 proc.standardOutput = outPipe
-                proc.standardError = Pipe()
+                proc.standardError = errPipe
                 do {
                     try proc.run()
-                    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+                    // waitUntilExit 전에 두 파이프를 끝까지 비운다 — 출력이 파이프 버퍼(≈64KB)를
+                    // 넘으면 안 읽힌 쪽이 가득 차 자식이 블록되고 데드락이 난다.
+                    let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
                     proc.waitUntilExit()
-                    cont.resume(returning: String(decoding: data, as: UTF8.self))
+                    guard proc.terminationStatus == 0 else {
+                        let err = String(decoding: errData, as: UTF8.self)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        cont.resume(throwing: EngineError.cli(code: proc.terminationStatus, stderr: err))
+                        return
+                    }
+                    cont.resume(returning: String(decoding: outData, as: UTF8.self))
                 } catch {
                     cont.resume(throwing: error)
                 }
             }
+        }
+    }
+}
+
+/// 엔진 subprocess 실패 — exit 코드와 stderr 를 보존해 UI 배너에 노출한다.
+enum EngineError: LocalizedError {
+    case cli(code: Int32, stderr: String)
+    var errorDescription: String? {
+        switch self {
+        case let .cli(code, stderr):
+            return stderr.isEmpty ? "엔진 실패 (코드 \(code))" : "엔진 실패 (코드 \(code)): \(stderr)"
         }
     }
 }

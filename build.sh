@@ -17,7 +17,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 # 2) SwiftUI 소스 컴파일 (@main 이라 -parse-as-library 필요)
 echo "  · swiftc 컴파일"
-swiftc -O -parse-as-library \
+# -target 으로 minos 를 Info.plist(LSMinimumSystemVersion=14.0)와 일치시킨다.
+# 없으면 swiftc 가 빌드머신 OS 를 minos 로 박아, plist 는 14.0 이라 광고하는데 실제 바이너리는
+# 구형 macOS 에서 "손상됨"으로 실행 거부되는 불일치가 난다(개인용 Apple Silicon 대상 arm64).
+swiftc -O -parse-as-library -target arm64-apple-macos14.0 \
     "$ROOT/Sources/"*.swift \
     -o "$APP/Contents/MacOS/$NAME"
 
@@ -27,7 +30,10 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/devsweep" "$APP/Contents/Resources/devsweep"
 chmod +x "$APP/Contents/Resources/devsweep"
-cp -R "$ROOT/Resources/icons" "$APP/Contents/Resources/icons"
+# 아이콘은 .svg 만 골라 복사 — 폴더째(cp -R) 넣으면 .omc/.DS_Store 같은 잡파일이
+# 번들에 섞여 들어가 ad-hoc 코드사이닝 무결성을 깬다.
+mkdir -p "$APP/Contents/Resources/icons"
+cp "$ROOT/Resources/icons/"*.svg "$APP/Contents/Resources/icons/"
 
 # 3b) 지원 언어 선언용 빈 .lproj — AppKit 표준 메뉴(File/Edit/Window/Help…)를 시스템 언어로 번역
 echo "  · 로컬라이제이션 .lproj 생성"

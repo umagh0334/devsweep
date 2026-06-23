@@ -25,8 +25,10 @@ set -euo pipefail
 #    SAFE_CATS  : `clean`/`clean all`에 포함되는 기본 안전 카테고리
 #    HEAVY_CATS : 재설치/재다운로드 비용이 큰 것 — 이름을 직접 지정해야만 정리
 # ─────────────────────────────────────────────────────────────
-SAFE_CATS=(gradle npm yarn pnpm bun pip uv cargo go maven cocoapods swiftpm composer nuget deno pub brew docker colima xcode vscode cursor zed codemate)
-HEAVY_CATS=(playwright rustup-targets xcode-sim huggingface jetbrains androidstudio codex)
+SAFE_CATS=(gradle npm yarn pnpm bun pip uv cargo go maven cocoapods swiftpm composer nuget deno pub brew colima xcode vscode cursor zed codemate)
+# docker 는 prune 이 중지 컨테이너/네트워크/빌드캐시까지 지우는 '상태성 큰' 작업이라
+# 기본 clean·자동정리(SAFE 전체)에 넣지 않는다. HEAVY 로 둬서 이름/‘all’ 지정 때만 정리.
+HEAVY_CATS=(docker playwright rustup-targets xcode-sim huggingface jetbrains androidstudio codex)
 # 네이티브 cleanup 명령(또는 prune)으로 정리되는 카테고리 — 나이 필터(--older-than) 미적용
 NATIVE_CATS=(npm yarn pnpm pip uv brew docker rustup-targets go nuget xcode-sim)
 # 경로가 없어(VM/메타데이터) 나이 필터(--older-than) 측정·정리가 불가능한 카테고리
@@ -534,7 +536,9 @@ cmd_detail() {
   local paths_json="[" first=1 p kb ex rd disp needs_tcc="false"
   while IFS= read -r p; do
     [ -z "$p" ] && continue
-    if [ -e "$p" ]; then ex="true"; kb=$( (du -sk "$p" 2>/dev/null || echo 0) | awk '{print $1}' )
+    # 나이 필터(AGE_DAYS) 반영: paths_size_kb 가 --older-than 시 mtime 기준만 합산 →
+    # path별 용량 합과 헤더 size_kb(do_<cat> size) 가 같은 기준으로 일치.
+    if [ -e "$p" ]; then ex="true"; kb=$(paths_size_kb "$p")
     else ex="false"; kb=0; fi
     kb=${kb:-0}
     if [ -r "$p" ]; then rd="true"; else rd="false"; fi

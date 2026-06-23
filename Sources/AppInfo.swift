@@ -1,7 +1,8 @@
 import Foundation
 
 /// 앱 메타 정보 — 버전·제작자·저작권·GitHub 저장소.
-/// ⚠️ repoOwner / repoName / author 는 추측값. 실제 값으로 확인·수정 필요.
+/// repoOwner/repoName 은 개인 비공개 repo. 공개 릴리스 전까지 releases/latest 는 404 →
+/// UpdateChecker 가 .noRelease("릴리스 없음")로 분기. 공개 + 릴리스 생성 시 자동으로 정상 동작.
 enum AppInfo {
     static var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"

@@ -74,8 +74,13 @@ enum AutoClean {
         export DEVSWEEP_CONFIG="$HOME/.config/devsweep/config"
         [ -x "$ENGINE" ] || exit 0
         est=$("$ENGINE" total $AGE 2>/dev/null); est=${est:-0}
-        "$ENGINE" clean --yes $AGE >/dev/null 2>&1
-        printf '{"ts":%s,"freedKB":%s,"status":"ok"}\\n' "$(date +%s)" "$est" >> "$STATE"
+        # clean exit code 를 기록 — 실패면 freedKB:0/status:failed 로 남겨 reconcile 이 합산하지 않게.
+        if "$ENGINE" clean --yes $AGE >>"$APPSUP/autoclean.run.log" 2>&1; then
+          printf '{"ts":%s,"freedKB":%s,"status":"ok"}\\n' "$(date +%s)" "$est" >> "$STATE"
+        else
+          rc=$?
+          printf '{"ts":%s,"freedKB":0,"status":"failed","code":%s}\\n' "$(date +%s)" "$rc" >> "$STATE"
+        fi
         """
         try? wrapper.write(toFile: autorunPath, atomically: true, encoding: .utf8)
 
@@ -152,7 +157,10 @@ enum AutoClean {
         for (i, line) in lines.enumerated() {
             guard let obj = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
             if let ts = (obj["ts"] as? NSNumber)?.intValue { lastTs = ts }
-            if i >= processed { addKB += (obj["freedKB"] as? NSNumber)?.intValue ?? 0 }
+            // 실패한 실행(status:failed)은 합산 제외 — 래퍼가 freedKB:0 으로도 막지만 이중 안전.
+            if i >= processed, (obj["status"] as? String) != "failed" {
+                addKB += (obj["freedKB"] as? NSNumber)?.intValue ?? 0
+            }
         }
         if addKB > 0 {
             d.set(d.integer(forKey: "totalReclaimedKB") + addKB, forKey: "totalReclaimedKB")

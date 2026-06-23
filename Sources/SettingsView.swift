@@ -623,6 +623,12 @@ struct AboutSettings: View {
         case .upToDate:
             Label(tr("about.upToDate", lang), systemImage: "checkmark.circle.fill")
                 .foregroundStyle(Theme.sweep).font(.caption)
+        case .noRelease:
+            HStack(spacing: 6) {
+                Label(tr("about.noRelease", lang), systemImage: "shippingbox")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button(tr("about.checkUpdate", lang)) { Task { await updater.check() } }.controlSize(.small)
+            }
         case .updateAvailable(let tag, let url):
             Button { openURL(url) } label: {
                 Label(tr("about.updateAvailFmt", lang, tag), systemImage: "arrow.down.circle.fill")

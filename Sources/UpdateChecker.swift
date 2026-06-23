@@ -10,6 +10,7 @@ final class UpdateChecker {
         case idle
         case checking
         case upToDate
+        case noRelease   // releases/latest 404 — 아직 공개 릴리스 없음(또는 비공개 repo)
         case updateAvailable(tag: String, url: URL)
         case failed
     }
@@ -22,9 +23,10 @@ final class UpdateChecker {
             req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             req.timeoutInterval = 10
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, http.statusCode == 200 else {
-                status = .failed; return
-            }
+            guard let http = resp as? HTTPURLResponse else { status = .failed; return }
+            // 404 = 릴리스 미존재(또는 비공개). 일반 네트워크 실패와 구분해 별도 UX 로 안내.
+            if http.statusCode == 404 { status = .noRelease; return }
+            guard http.statusCode == 200 else { status = .failed; return }
             let rel = try JSONDecoder().decode(GHRelease.self, from: data)
             let latest = rel.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
             let url = URL(string: rel.htmlURL) ?? AppInfo.releasesURL

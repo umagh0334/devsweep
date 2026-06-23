@@ -4,6 +4,7 @@ import AppKit
 struct ContentView: View {
     let engine: Engine
     @State private var selectedDetail: String?
+    @State private var confirmCleanAll = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.appLanguage) private var lang
     @AppStorage("autoScan") private var autoScan = true
@@ -12,6 +13,13 @@ struct ContentView: View {
     private var totalKB: Int { engine.categories.filter { !$0.protected }.reduce(0) { $0 + $1.sizeKB } }
     private var selectedKB: Int { engine.categories.filter(\.selected).reduce(0) { $0 + $1.sizeKB } }
     private var selectedCount: Int { engine.categories.filter(\.selected).count }
+    private var selectedHasHeavy: Bool { engine.categories.contains { $0.selected && $0.heavy } }
+    /// 정리 확인 다이얼로그 본문 — 항목 수·예상 회수 용량(+heavy 포함 경고)
+    private var confirmAllMessage: String {
+        var s = tr("confirm.messageFmt", lang, selectedCount, humanKB(selectedKB))
+        if selectedHasHeavy { s += "\n" + tr("confirm.heavyWarn", lang) }
+        return s
+    }
     /// 정리 가능(용량 있음 + 보호 안 됨), 용량 내림차순 — 분포 바·색·자동선택의 기준
     private var ranked: [CacheCategory] { engine.categories.filter { $0.hasSize && !$0.protected }.sorted { $0.sizeKB > $1.sizeKB } }
 
@@ -235,12 +243,16 @@ struct ContentView: View {
                 HStack(spacing: 5) { Icons.view("refresh", size: 12); Text(tr("footer.rescan", lang)) }
             }
             .disabled(engine.isScanning || engine.isCleaning)
-            Button { Task { await engine.clean() } } label: {
+            Button { confirmCleanAll = true } label: {
                 HStack(spacing: 5) { Icons.view("trash", size: 12); Text(tr("footer.clean", lang)) }
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(selectedCount == 0 || engine.isCleaning || engine.isScanning)
+            .confirmationDialog(tr("confirm.title", lang), isPresented: $confirmCleanAll, titleVisibility: .visible) {
+                Button(tr("confirm.clean", lang), role: .destructive) { Task { await engine.clean() } }
+                Button(tr("confirm.cancel", lang), role: .cancel) {}
+            } message: { Text(confirmAllMessage) }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.regularMaterial)
@@ -332,6 +344,7 @@ struct DetailPanel: View {
     let rank: Int?
     let engine: Engine
     @Environment(\.appLanguage) private var lang
+    @State private var confirmClean = false
 
     private var detail: CategoryDetail? { engine.detailCache[cat.name] }
     private var loading: Bool { engine.loadingDetails.contains(cat.name) }
@@ -367,7 +380,7 @@ struct DetailPanel: View {
                 actionBar
             }
         }
-        .task(id: cat.name) {
+        .task(id: "\(cat.name)#\(engine.detailRevision)") {
             if engine.detailCache[cat.name] == nil { await engine.loadDetail(cat.name) }
         }
     }
@@ -482,11 +495,19 @@ struct DetailPanel: View {
             Text(tr("detail.cleanThisInfoFmt", lang, cat.sizeHuman))
                 .font(.caption).foregroundStyle(.secondary)
             Spacer()
-            Button { Task { await engine.clean(targets: [cat.name]) } } label: {
+            Button { confirmClean = true } label: {
                 HStack(spacing: 5) { Icons.view("trash", size: 12); Text(tr("detail.cleanThis", lang)) }
             }
             .buttonStyle(.borderedProminent)
             .disabled(engine.isCleaning || engine.isScanning)
+            .confirmationDialog(tr("confirm.title", lang), isPresented: $confirmClean, titleVisibility: .visible) {
+                Button(tr("confirm.clean", lang), role: .destructive) { Task { await engine.clean(targets: [cat.name]) } }
+                Button(tr("confirm.cancel", lang), role: .cancel) {}
+            } message: {
+                Text(cat.heavy
+                     ? tr("confirm.oneMessageFmt", lang, cat.name, cat.sizeHuman) + "\n" + tr("confirm.heavyWarn", lang)
+                     : tr("confirm.oneMessageFmt", lang, cat.name, cat.sizeHuman))
+            }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(.regularMaterial)
