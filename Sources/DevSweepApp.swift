@@ -9,6 +9,10 @@ struct DevSweepApp: App {
     @AppStorage("language") private var languageRaw = ""   // 빈값이면 시스템 언어 추정
     @AppStorage("autoClean") private var autoClean = false
     @AppStorage("autoCleanPeriod") private var autoCleanPeriod = 0   // 0=매일 1=매주 2=매월
+    @AppStorage("autoCleanHour") private var autoCleanHour = 3       // 실행 시(0~23), 기본 새벽 3시
+    @AppStorage("autoCleanMinute") private var autoCleanMinute = 0   // 실행 분(0~59)
+    @AppStorage("autoCleanWeekday") private var autoCleanWeekday = 0 // 매주: 0=일~6=토
+    @AppStorage("autoCleanDay") private var autoCleanDay = 1         // 매월: 1~28일
     @AppStorage("olderThanDays") private var olderThanDays = 0
 
     private var scheme: ColorScheme? {
@@ -24,13 +28,13 @@ struct DevSweepApp: App {
                 .task {
                     // 콜드 런치 시 1회(.onChange 는 초기값엔 미발동) — 자동 정리 결과 합산 + 상태 self-heal
                     AutoClean.reconcile()
-                    AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, olderThanDays: olderThanDays)
+                    AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, hour: autoCleanHour, minute: autoCleanMinute, weekday: autoCleanWeekday, day: autoCleanDay, olderThanDays: olderThanDays)
                 }
                 .onChange(of: scenePhase) { _, phase in
                     // 다시 포그라운드 진입 시 재합산(단일 writer)
                     guard phase == .active else { return }
                     AutoClean.reconcile()
-                    AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, olderThanDays: olderThanDays)
+                    AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, hour: autoCleanHour, minute: autoCleanMinute, weekday: autoCleanWeekday, day: autoCleanDay, olderThanDays: olderThanDays)
                 }
         }
         .windowResizability(.contentSize)

@@ -117,8 +117,11 @@ enum DevProfile {
 
     struct Badge: Identifiable { var id: String { title }; let emoji: String; let title: String }
 
+    /// 배지 희소성 (획득 난이도) — 조건 난이도 기반 정적 등급. 색·라벨은 뷰 레이어에서 매핑.
+    enum BadgeRarity: String, CaseIterable { case common, uncommon, rare, legendary }
+
     /// 캐시 구성·누적 회수량으로 획득한 배지
-    struct BadgeDef { let key: String; let emoji: String; let test: ([CacheCategory], Int) -> Bool }
+    struct BadgeDef { let key: String; let emoji: String; let rarity: BadgeRarity; let test: ([CacheCategory], Int) -> Bool }
 
     private static func catSize(_ cats: [CacheCategory], _ ns: Set<String>) -> Int {
         cats.filter { ns.contains($0.name) }.reduce(0) { $0 + $1.sizeKB }
@@ -126,22 +129,22 @@ enum DevProfile {
 
     /// 전체 배지 정의 (조건 충족분만 표시). 총 개수 = allBadges.count
     static let allBadges: [BadgeDef] = [
-        .init(key: "multimanager", emoji: "🧩", test: { c, _ in c.filter { ["npm","yarn","pnpm","bun"].contains($0.name) && $0.sizeKB > 0 }.count >= 2 }),
-        .init(key: "container",    emoji: "🐳", test: { c, _ in catSize(c, ["docker","colima"]) > 0 }),
-        .init(key: "compile",      emoji: "🦀", test: { c, _ in catSize(c, ["cargo","rustup-targets"]) > 200 * 1024 }),
-        .init(key: "ml",           emoji: "🤖", test: { c, _ in catSize(c, ["huggingface"]) > 0 }),
-        .init(key: "e2e",          emoji: "🎭", test: { c, _ in catSize(c, ["playwright"]) > 0 }),
-        .init(key: "apple",        emoji: "🍎", test: { c, _ in catSize(c, ["xcode","swiftpm","cocoapods","xcode-sim"]) > 0 }),
-        .init(key: "hoarder",      emoji: "📦", test: { c, _ in breakdown(c).count >= 5 }),
-        .init(key: "cleanup",      emoji: "🧹", test: { _, r in r > 1024 * 1024 }),
-        .init(key: "diskhog",      emoji: "🗄️", test: { c, _ in c.reduce(0) { $0 + $1.sizeKB } > 10 * 1024 * 1024 }),
-        .init(key: "polymaster",   emoji: "🌐", test: { c, _ in breakdown(c).count >= 8 }),
-        .init(key: "vmheavy",      emoji: "🏗️", test: { c, _ in catSize(c, ["docker","colima"]) > 3 * 1024 * 1024 }),
-        .init(key: "datasci",      emoji: "📊", test: { c, _ in catSize(c, ["pip"]) > 0 && catSize(c, ["huggingface"]) > 0 }),
-        .init(key: "early",        emoji: "🚀", test: { c, _ in catSize(c, ["deno","bun"]) > 0 }),
-        .init(key: "builder",      emoji: "🔨", test: { c, _ in [Set(["cargo","rustup-targets"]), Set(["go"]), Set(["gradle","maven"])].filter { catSize(c, $0) > 0 }.count >= 2 }),
-        .init(key: "crossplat",    emoji: "🎯", test: { c, _ in catSize(c, ["pub"]) > 0 }),
-        .init(key: "cleanmaster",  emoji: "🏆", test: { _, r in r > 10 * 1024 * 1024 }),
+        .init(key: "multimanager", emoji: "🧩", rarity: .common,    test: { c, _ in c.filter { ["npm","yarn","pnpm","bun"].contains($0.name) && $0.sizeKB > 0 }.count >= 2 }),
+        .init(key: "container",    emoji: "🐳", rarity: .common,    test: { c, _ in catSize(c, ["docker","colima"]) > 0 }),
+        .init(key: "compile",      emoji: "🦀", rarity: .uncommon,  test: { c, _ in catSize(c, ["cargo","rustup-targets"]) > 200 * 1024 }),
+        .init(key: "ml",           emoji: "🤖", rarity: .rare,      test: { c, _ in catSize(c, ["huggingface"]) > 0 }),
+        .init(key: "e2e",          emoji: "🎭", rarity: .uncommon,  test: { c, _ in catSize(c, ["playwright"]) > 0 }),
+        .init(key: "apple",        emoji: "🍎", rarity: .common,    test: { c, _ in catSize(c, ["xcode","swiftpm","cocoapods","xcode-sim"]) > 0 }),
+        .init(key: "hoarder",      emoji: "📦", rarity: .uncommon,  test: { c, _ in breakdown(c).count >= 5 }),
+        .init(key: "cleanup",      emoji: "🧹", rarity: .common,    test: { _, r in r > 1024 * 1024 }),
+        .init(key: "diskhog",      emoji: "🗄️", rarity: .uncommon,  test: { c, _ in c.reduce(0) { $0 + $1.sizeKB } > 10 * 1024 * 1024 }),
+        .init(key: "polymaster",   emoji: "🌐", rarity: .rare,      test: { c, _ in breakdown(c).count >= 8 }),
+        .init(key: "vmheavy",      emoji: "🏗️", rarity: .rare,      test: { c, _ in catSize(c, ["docker","colima"]) > 3 * 1024 * 1024 }),
+        .init(key: "datasci",      emoji: "📊", rarity: .legendary, test: { c, _ in catSize(c, ["pip"]) > 0 && catSize(c, ["huggingface"]) > 0 }),
+        .init(key: "early",        emoji: "🚀", rarity: .uncommon,  test: { c, _ in catSize(c, ["deno","bun"]) > 0 }),
+        .init(key: "builder",      emoji: "🔨", rarity: .rare,      test: { c, _ in [Set(["cargo","rustup-targets"]), Set(["go"]), Set(["gradle","maven"])].filter { catSize(c, $0) > 0 }.count >= 2 }),
+        .init(key: "crossplat",    emoji: "🎯", rarity: .rare,      test: { c, _ in catSize(c, ["pub"]) > 0 }),
+        .init(key: "cleanmaster",  emoji: "🏆", rarity: .legendary, test: { _, r in r > 10 * 1024 * 1024 }),
     ]
 
     /// 시즌제 — 만료(획득 후 기간 경과)된 배지는 제거하고, 비활성 배지는 현재 조건으로 재판정.
@@ -172,5 +175,10 @@ enum DevProfile {
     /// 배지 키 → 이모지
     static func emoji(forKey key: String) -> String {
         allBadges.first { $0.key == key }?.emoji ?? "🏅"
+    }
+
+    /// 배지 키 → 희소성 등급
+    static func rarity(forKey key: String) -> BadgeRarity {
+        allBadges.first { $0.key == key }?.rarity ?? .common
     }
 }

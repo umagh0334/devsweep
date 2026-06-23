@@ -64,14 +64,14 @@ struct SettingsView: View {
 
 /// 좌측 사이드바 섹션 (Solar 아이콘).
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case general, protect, advanced, developer, about
+    case general, developer, protect, advanced, about    // 사이드바 표시 순서 = 선언 순서
     var id: String { rawValue }
     var titleKey: String {
         switch self {
         case .general:   return "set.general"
+        case .developer: return "set.profile"            // "내 프로필" (캐시로 본 개발 성향·배지)
         case .protect:   return "set.protect"
         case .advanced:  return "set.advanced"
-        case .developer: return "set.developer"
         case .about:     return "set.about"
         }
     }
@@ -140,6 +140,10 @@ struct AdvancedSettings: View {
     @AppStorage("badgePeriodDays") private var badgePeriodDays = 30
     @AppStorage("autoClean") private var autoClean = false
     @AppStorage("autoCleanPeriod") private var autoCleanPeriod = 0      // 0=매일 1=매주 2=매월
+    @AppStorage("autoCleanHour") private var autoCleanHour = 3          // 실행 시(0~23)
+    @AppStorage("autoCleanMinute") private var autoCleanMinute = 0      // 실행 분(0~59)
+    @AppStorage("autoCleanWeekday") private var autoCleanWeekday = 0    // 매주: 0=일~6=토
+    @AppStorage("autoCleanDay") private var autoCleanDay = 1            // 매월: 1~28일
     @AppStorage("autoLastRunTs") private var autoLastRunTs = 0
 
     private var lastRunText: String {
@@ -152,6 +156,39 @@ struct AdvancedSettings: View {
         // headless 권한 한계는 신뢰성 있게 감지하기 어려워(정상 0회수와 구분 불가) 켜졌을 때 상시 안내
         if autoClean { s += "\n\n" + tr("auto.fda", lang) }
         return s
+    }
+
+    /// 자동 정리 재적용 — launchctl·파일복사라 백그라운드(메인스레드 블로킹 방지). 켜져 있을 때만.
+    private func reapplySchedule() {
+        guard autoClean else { return }
+        let p = autoCleanPeriod, h = autoCleanHour, m = autoCleanMinute, w = autoCleanWeekday, dd = autoCleanDay, o = olderThanDays
+        DispatchQueue.global(qos: .utility).async {
+            AutoClean.enable(period: p, hour: h, minute: m, weekday: w, day: dd, olderThanDays: o)
+        }
+    }
+
+    /// 실행 시각 Int(시·분) ↔ DatePicker용 Date 양방향 매핑. set 시 즉시 재적용.
+    private var runTime: Binding<Date> {
+        Binding(
+            get: {
+                var c = DateComponents(); c.hour = autoCleanHour; c.minute = autoCleanMinute
+                return Calendar.current.date(from: c) ?? Date()
+            },
+            set: { newValue in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+                autoCleanHour = c.hour ?? 3
+                autoCleanMinute = c.minute ?? 0
+                reapplySchedule()
+            }
+        )
+    }
+
+    /// 요일 인덱스(0=일~6=토) → 앱 언어 기준 요일명. Calendar+Locale 로 OS 현지화(요일 i18n 불필요).
+    private func weekdaySymbol(_ wd: Int) -> String {
+        var cal = Calendar(identifier: .gregorian)
+        cal.locale = Locale(identifier: lang.rawValue)
+        let syms = cal.standaloneWeekdaySymbols          // index 0 = Sunday → launchd Weekday 와 일치
+        return (wd >= 0 && wd < syms.count) ? syms[wd] : "\(wd)"
     }
 
     var body: some View {
@@ -178,16 +215,10 @@ struct AdvancedSettings: View {
             Section {
                 Toggle(isOn: $autoClean) { Text(tr("auto.toggle", lang)) }
                     .onChange(of: autoClean) { _, on in
-                        let p = autoCleanPeriod, o = olderThanDays
-                        DispatchQueue.global(qos: .utility).async {   // launchctl·파일복사가 메인스레드 안 막게
-                            if on { AutoClean.enable(period: p, olderThanDays: o) } else { AutoClean.disable() }
-                        }
+                        if on { reapplySchedule() }                                 // 켜짐 → 현재 스케줄로 등록
+                        else { DispatchQueue.global(qos: .utility).async { AutoClean.disable() } }
                     }
-                    .onChange(of: olderThanDays) { _, o in
-                        guard autoClean else { return }
-                        let p = autoCleanPeriod
-                        DispatchQueue.global(qos: .utility).async { AutoClean.enable(period: p, olderThanDays: o) }
-                    }
+                    .onChange(of: olderThanDays) { _, _ in reapplySchedule() }
                 if autoClean {
                     LabeledContent(tr("auto.period", lang)) {
                         Picker("", selection: $autoCleanPeriod) {
@@ -196,9 +227,27 @@ struct AdvancedSettings: View {
                             Text(tr("auto.monthly", lang)).tag(2)
                         }
                         .labelsHidden().fixedSize()
-                        .onChange(of: autoCleanPeriod) { _, p in
-                            let o = olderThanDays
-                            DispatchQueue.global(qos: .utility).async { AutoClean.enable(period: p, olderThanDays: o) }
+                        .onChange(of: autoCleanPeriod) { _, _ in reapplySchedule() }
+                    }
+                    LabeledContent(tr("auto.time", lang)) {
+                        DatePicker("", selection: runTime, displayedComponents: .hourAndMinute)
+                            .labelsHidden().fixedSize()
+                    }
+                    if autoCleanPeriod == 1 {                                        // 매주 → 요일
+                        LabeledContent(tr("auto.weekday", lang)) {
+                            Picker("", selection: $autoCleanWeekday) {
+                                ForEach(0..<7, id: \.self) { wd in Text(weekdaySymbol(wd)).tag(wd) }
+                            }
+                            .labelsHidden().fixedSize()
+                            .onChange(of: autoCleanWeekday) { _, _ in reapplySchedule() }
+                        }
+                    } else if autoCleanPeriod == 2 {                                 // 매월 → 날짜(1~28)
+                        LabeledContent(tr("auto.monthday", lang)) {
+                            Picker("", selection: $autoCleanDay) {
+                                ForEach(1...28, id: \.self) { d in Text(tr("auto.dayFmt", lang, d)).tag(d) }
+                            }
+                            .labelsHidden().fixedSize()
+                            .onChange(of: autoCleanDay) { _, _ in reapplySchedule() }
                         }
                     }
                     LabeledContent(tr("auto.lastRun", lang)) {
@@ -290,6 +339,7 @@ struct DeveloperSettings: View {
     @State private var showGallery = false
     @State private var showBadgeGallery = false
     @State private var shownKeys: [String] = []
+    @State private var hoverBadge: String? = nil       // 호버 중인 획득 배지 키 (툴팁 팝오버)
 
     var body: some View {
         let slices = DevProfile.breakdown(engine.categories)
@@ -333,10 +383,19 @@ struct DeveloperSettings: View {
             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 11) {
                 ForEach(DevProfile.allBadges, id: \.key) { b in
                     let earned = shownKeys.contains(b.key)
+                    let color = rarityColor(b.rarity)
                     GridRow {
-                        Text(b.emoji).font(.title3).opacity(earned ? 1 : 0.45)
-                        Text(tr("badge.\(b.key)", lang)).font(.callout)
-                            .foregroundStyle(earned ? .primary : .secondary)
+                        Text(b.emoji).font(.body)
+                            .frame(width: 30, height: 30)
+                            .background(Circle().fill(color.opacity(earned ? 0.14 : 0.06)))
+                            .overlay(Circle().strokeBorder(color.opacity(earned ? 0.55 : 0.28), lineWidth: 1.2))
+                            .opacity(earned ? 1 : 0.5)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(tr("badge.\(b.key)", lang)).font(.callout)
+                                .foregroundStyle(earned ? .primary : .secondary)
+                            Text(tr("rarity.\(b.rarity.rawValue)", lang)).font(.caption2)
+                                .foregroundStyle(color.opacity(earned ? 0.9 : 0.6))
+                        }
                         Group {
                             if earned { Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.sweep) }
                             else { Image(systemName: "lock.fill").foregroundStyle(.tertiary) }
@@ -451,19 +510,63 @@ struct DeveloperSettings: View {
         .padding(.vertical, 8)
     }
 
-    /// 획득 배지 칩 (반응형 그리드)
+    /// 희소성 등급 → 색 (게임 관습: 보통 회색 · 중간 파랑 · 희소 보라 · 매우 희소 금색)
+    private func rarityColor(_ r: DevProfile.BadgeRarity) -> Color {
+        switch r {
+        case .common:    return .gray
+        case .uncommon:  return .blue
+        case .rare:      return .purple
+        case .legendary: return Color(red: 0.90, green: 0.64, blue: 0.10)   // gold
+        }
+    }
+
+    /// 획득 배지 — 아이콘 타일만 표시(테두리=희소성 색), 마우스 오버 시 제목+설명+등급 팝오버
+    /// 팝오버를 배지 위쪽(arrowEdge:.top)에 띄워 마우스가 배지를 벗어나지 않게 → 깜빡임 방지
     private func badgesView(_ keys: [String]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 7)], alignment: .leading, spacing: 7) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], alignment: .leading, spacing: 8) {
             ForEach(keys, id: \.self) { key in
-                HStack(spacing: 5) {
-                    Text(DevProfile.emoji(forKey: key)).font(.callout)
-                    Text(tr("badge.\(key)", lang)).font(.caption).fontWeight(.medium)
-                }
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Capsule().fill(Theme.sweep.opacity(0.12)))
+                let color = rarityColor(DevProfile.rarity(forKey: key))
+                Text(DevProfile.emoji(forKey: key))
+                    .font(.title2)
+                    .frame(width: 42, height: 42)
+                    .background(Circle().fill(color.opacity(0.14)))
+                    .overlay(Circle().strokeBorder(color.opacity(0.55), lineWidth: 1.5))
+                    .onHover { hovering in
+                        if hovering { hoverBadge = key }
+                        else if hoverBadge == key { hoverBadge = nil }
+                    }
+                    .popover(isPresented: Binding(
+                        get: { hoverBadge == key },
+                        set: { if !$0 && hoverBadge == key { hoverBadge = nil } }
+                    ), arrowEdge: .top) { badgeTip(key) }
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// 호버 시 뜨는 배지 정보 카드 — [이모지][제목]···[희소도] 한 줄 + [설명] 둘째 줄
+    /// 유동 너비: 제목 줄은 줄바꿈 금지(fixedSize)로 팝오버 폭을 키우고, 설명만 maxWidth 안에서 wrap
+    private func badgeTip(_ key: String) -> some View {
+        let rarity = DevProfile.rarity(forKey: key)
+        let color = rarityColor(rarity)
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(DevProfile.emoji(forKey: key)).font(.title3)
+                Text(tr("badge.\(key)", lang)).font(.headline).fixedSize()
+                Spacer(minLength: 10)
+                HStack(spacing: 4) {
+                    Circle().fill(color).frame(width: 6, height: 6)
+                    Text(tr("rarity.\(rarity.rawValue)", lang))
+                        .font(.caption).fontWeight(.semibold).foregroundStyle(color)
+                }
+                .fixedSize()
+            }
+            Text(tr("badge.\(key).desc", lang))
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(minWidth: 170, maxWidth: 340, alignment: .leading)
     }
 }
 

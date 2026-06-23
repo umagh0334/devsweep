@@ -19,12 +19,15 @@ enum AutoClean {
     private static var runsLog: String { "\(appSupport)/runs.jsonl" }
     private static var plistPath: String { "\(home)/Library/LaunchAgents/\(label).plist" }
 
-    /// 주기: 0=매일(3시) / 1=매주(일요일 3시) / 2=매월(1일 3시). Minute 항상 명시, Day:1 고정(짧은달 누락 방지).
-    private static func scheduleXML(_ period: Int) -> String {
+    /// 주기별 StartCalendarInterval. 0=매일 / 1=매주(weekday 0=일~6=토) / 2=매월(day 1~28).
+    /// Minute 항상 명시. Day 는 1~28 만 허용(29~31 은 짧은달 누락 → UI에서 제한, 여기서도 clamp).
+    private static func scheduleXML(period: Int, hour: Int, minute: Int, weekday: Int, day: Int) -> String {
+        let h = max(0, min(23, hour)), m = max(0, min(59, minute))
+        let hm = "<key>Hour</key><integer>\(h)</integer><key>Minute</key><integer>\(m)</integer>"
         switch period {
-        case 1:  return "<key>Weekday</key><integer>0</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer>"
-        case 2:  return "<key>Day</key><integer>1</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer>"
-        default: return "<key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer>"
+        case 1:  return "<key>Weekday</key><integer>\(max(0, min(6, weekday)))</integer>" + hm
+        case 2:  return "<key>Day</key><integer>\(max(1, min(28, day)))</integer>" + hm
+        default: return hm
         }
     }
 
@@ -80,8 +83,8 @@ enum AutoClean {
         try? AppInfo.version.write(toFile: versionStamp, atomically: true, encoding: .utf8)
     }
 
-    /// 자동 정리 켜기(멱등). 주기 변경도 동일 경로로 재적용.
-    static func enable(period: Int, olderThanDays: Int) {
+    /// 자동 정리 켜기(멱등). 주기·시각·요일·날짜 변경도 동일 경로로 재적용.
+    static func enable(period: Int, hour: Int, minute: Int, weekday: Int, day: Int, olderThanDays: Int) {
         installEngine(olderThanDays: olderThanDays)
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -97,7 +100,7 @@ enum AutoClean {
             <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
           </dict>
           <key>StartCalendarInterval</key>
-          <dict>\(scheduleXML(period))</dict>
+          <dict>\(scheduleXML(period: period, hour: hour, minute: minute, weekday: weekday, day: day))</dict>
           <key>RunAtLoad</key><false/>
           <key>ProcessType</key><string>Background</string>
           <key>LowPriorityIO</key><true/>
@@ -125,13 +128,13 @@ enum AutoClean {
     }
 
     /// 앱 active 시: 원하는 상태(@AppStorage)와 실제 plist/엔진 버전을 수렴(self-heal).
-    static func syncIfNeeded(enabled: Bool, period: Int, olderThanDays: Int) {
+    static func syncIfNeeded(enabled: Bool, period: Int, hour: Int, minute: Int, weekday: Int, day: Int, olderThanDays: Int) {
         let plistExists = FileManager.default.fileExists(atPath: plistPath)
         if enabled {
             let stamp = (try? String(contentsOfFile: versionStamp, encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !plistExists || stamp != AppInfo.version {
-                enable(period: period, olderThanDays: olderThanDays)   // 미설치 or 구버전 엔진 → 재설치
+                enable(period: period, hour: hour, minute: minute, weekday: weekday, day: day, olderThanDays: olderThanDays)   // 미설치 or 구버전 엔진 → 재설치
             }
         } else if plistExists {
             disable()

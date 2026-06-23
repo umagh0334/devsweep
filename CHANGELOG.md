@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## 2026-06-23
+
+### ⏰ 자동 정리 스케줄 커스터마이징 (실행 시각·요일·날짜)
+- 실행 시각 하드코딩(새벽 3시) 제거 → **DatePicker(시:분)**로 사용자가 지정. 모든 주기 공통
+- **매주 → 요일 선택**(매주 화요일 등), **매월 → 날짜 선택**(1~28일). 요일명은 `Calendar.standaloneWeekdaySymbols`+앱 언어 `Locale`로 OS 현지화(요일 i18n 84개 회피), launchd Weekday(0=일)와 인덱스 일치
+- **"매월 특정 요일"은 미지원**: launchd `StartCalendarInterval`이 Weekday·Day 를 동시 지정 시 AND 아닌 **OR**로 동작해 "매월 둘째 화요일" 표현 불가 → 매월은 날짜 기준. 매월 Day 는 29~31 짧은달 누락 방지로 1~28 만
+- `AutoClean.enable`/`syncIfNeeded` 시그니처에 hour·minute·weekday·day 추가, `scheduleXML` clamp(시0~23·분0~59·요일0~6·일1~28). AppStorage 4키(autoCleanHour/Minute/Weekday/Day). onChange 들을 `reapplySchedule`(백그라운드 디스패치)로 통합
+- `auto.time`/`auto.weekday`/`auto.monthday`/`auto.dayFmt` 12언어 + `auto.toggleDesc` "새벽 3시"→"지정한 시각" 일반화
+- 검증: 빌드 + **생성 plist 확인**(매주 화 14:30 → `Weekday:2 Hour:14 Minute:30`, `RunAtLoad=false` 유지) + UI 스크린샷(실행 시각 "오후 2:30"·요일 "화요일"). 검증 LaunchAgent·defaults 원복
+
+### ✏️ '오래된 캐시만 정리' → '오래된 캐시 정리'
+- 섹션 헤더 `set.age` 에서 "만" 제거 → 더 간결하게 (12언어)
+
+### ✏️ 고급 설정 나이 필터 라벨 명확화
+- 섹션 헤더 `set.age` "오래된 항목만" → **"오래된 캐시만 정리"**(동작까지 한눈에, "항목"→"캐시" 구체화), 12언어 갱신
+- Picker 라벨 `age.label` 한국어 "기간 기준" → **"기준 기간"**(어순 교정, ko만)
+- 검증: 빌드, cua 스크린샷
+
+### 🏷️ '개발자' 탭 → '내 프로필'로 개명 + 위치 이동
+- '개발자' 탭이 옆의 '고급 설정'과 혼동돼 전문/고급 기능처럼 오해될 소지 → **'내 프로필'**(My Profile)로 개명. 실제 내용(캐시로 본 개발 성향·스택·배지)이 "프로필"에 부합
+- 사이드바 순서: 맨 끝(고급 설정 뒤) → **일반 바로 다음**(일반 → 내 프로필 → 보호 목록 → 고급 설정 → 정보). 발견성↑, '일반' 첫 자리 관례 유지
+- `SettingsSection` 선언 순서가 사이드바 순서이므로 enum 재배열 + `set.developer`→`set.profile` rename(12언어 "내 프로필"). 케이스명/구조체(DeveloperSettings)는 유지 — 내부 식별자 불변
+- 검증: 빌드, cua 스크린샷(순서·라벨 반영 확인)
+
+### 💎 배지 희소성(획득 난이도) 등급 시스템
+- 배지마다 조건 난이도 기반 **정적 희소성 등급** 4단계: 보통/중간/희소/매우 희소 (로컬 전용 앱이라 유저 통계% 같은 동적 희소도는 불가 → 조건 난이도로 정적 부여)
+- 분류: 보통 4(multimanager·container·apple·cleanup) · 중간 5(compile·e2e·hoarder·diskhog·early) · 희소 5(ml·polymaster·vmheavy·builder·crossplat) · 매우 희소 2(datasci·cleanmaster)
+- 색 관습(게임식): 보통 회색 · 중간 파랑 · 희소 보라 · 매우 희소 금색. **enum은 데이터(DevProfile), 색은 뷰(SettingsView)** 분리(DevProfile은 Foundation만 의존)
+- 표시: 획득 타일에 등급 테두리 색 / 호버 팝오버 `[이모지][제목]···[희소도]` 한 줄 + 설명 둘째 줄(유동 너비 — 제목 `fixedSize`로 줄바꿈 차단, 설명만 maxWidth 안에서 wrap → 긴 언어에서도 안 깨짐) / 전체 배지 갤러리에 이름 아래 등급 라벨 + 테두리(미획득도 희귀도 미리 노출 → 해금 동기)
+- `rarity.*` 4종 × 12언어 신규. 검증: 빌드, cua 스크린샷(타일 테두리 회색/파랑 구분, 갤러리 등급 라벨 렌더)
+
+### 🏅 획득 배지 → 아이콘 전용 + 호버 설명
+- 획득 배지 섹션을 칩(아이콘+제목)에서 **아이콘 타일만** 표시로 개편. 마우스 오버 시 제목(굵게)+설명이 위쪽 팝오버로 떠서 정보 노출(깜빡임 방지 위해 `arrowEdge:.top`로 배지를 안 가림)
+- 배지 설명 `badge.<key>.desc` 16종 × 12언어 신규(획득 조건을 친근하게). `[...]` 전체 배지 갤러리는 그대로 유지
+- 검증: 빌드 통과, cua AX 트리로 아이콘 전용 렌더(🧩🐳🦀🎭📦, 제목 없음) + 스크린샷 확인
+
 ## 2026-06-22
 
 ### ⏰ 자동 정리 (launchd 주기 실행) 구현
