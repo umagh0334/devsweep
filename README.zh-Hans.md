@@ -85,7 +85,7 @@ ln -s "$PWD/devsweep" ~/.local/bin/devsweep
 open DevSweep.app
 ```
 
-`build.sh` 使用 `swiftc` 编译 `Sources/*.swift`，将 `Info.plist`、经过验证的 `devsweep` 引擎和图标打包在一起，为 15 个语言区域生成 `.lproj` 文件夹，并对应用进行 ad-hoc 签名。目标平台为 macOS 14+ / Apple Silicon。
+`build.sh` 使用 `swiftc` 编译 `Sources/*.swift`，将 `Info.plist`、经过验证的 `devsweep` 引擎和图标打包在一起，为 15 个语言区域生成 `.lproj` 文件夹，并对应用进行 ad-hoc 签名。构建为 **universal binary**（Apple Silicon + Intel），支持 macOS 14+。
 
 ---
 

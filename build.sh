@@ -15,14 +15,20 @@ echo "▶ DevSweep 빌드"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# 2) SwiftUI 소스 컴파일 (@main 이라 -parse-as-library 필요)
-echo "  · swiftc 컴파일"
-# -target 으로 minos 를 Info.plist(LSMinimumSystemVersion=14.0)와 일치시킨다.
-# 없으면 swiftc 가 빌드머신 OS 를 minos 로 박아, plist 는 14.0 이라 광고하는데 실제 바이너리는
-# 구형 macOS 에서 "손상됨"으로 실행 거부되는 불일치가 난다(개인용 Apple Silicon 대상 arm64).
+# 2) SwiftUI 소스 컴파일 — universal binary (arm64 + x86_64) 로 Apple Silicon·Intel Mac 모두 지원.
+#    @main 이라 -parse-as-library 필요. -target 으로 minos 를 Info.plist(LSMinimumSystemVersion=14.0)와
+#    일치(없으면 빌드머신 OS 가 minos 로 박혀 구형 macOS 에서 "손상됨" 거부됨). 각 아키텍처를 따로
+#    컴파일한 뒤 lipo 로 fat binary 결합 — x86_64 는 arm64 머신에서도 크로스 컴파일된다(SDK가 universal).
+echo "  · swiftc 컴파일 (arm64)"
 swiftc -O -parse-as-library -target arm64-apple-macos14.0 \
-    "$ROOT/Sources/"*.swift \
-    -o "$APP/Contents/MacOS/$NAME"
+    "$ROOT/Sources/"*.swift -o "$APP/Contents/MacOS/$NAME.arm64"
+echo "  · swiftc 컴파일 (x86_64)"
+swiftc -O -parse-as-library -target x86_64-apple-macos14.0 \
+    "$ROOT/Sources/"*.swift -o "$APP/Contents/MacOS/$NAME.x86_64"
+echo "  · lipo 결합 (universal)"
+lipo -create -output "$APP/Contents/MacOS/$NAME" \
+    "$APP/Contents/MacOS/$NAME.arm64" "$APP/Contents/MacOS/$NAME.x86_64"
+rm -f "$APP/Contents/MacOS/$NAME.arm64" "$APP/Contents/MacOS/$NAME.x86_64"
 
 # 3) Info.plist + 검증된 CLI 엔진 + Solar 아이콘을 번들에 동봉 (self-contained)
 echo "  · Info.plist / devsweep 엔진 / 아이콘 동봉"

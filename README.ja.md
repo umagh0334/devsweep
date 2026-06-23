@@ -85,7 +85,7 @@ ln -s "$PWD/devsweep" ~/.local/bin/devsweep
 open DevSweep.app
 ```
 
-`build.sh` は `Sources/*.swift` を `swiftc` でコンパイルし、`Info.plist` + 検証済み `devsweep` エンジン + アイコンをバンドルし、15ロケール分の `.lproj` フォルダを生成してアプリに ad-hoc 署名を行う。対象は Apple Silicon 上の macOS 14 以降。
+`build.sh` は `Sources/*.swift` を `swiftc` でコンパイルし、`Info.plist` + 検証済み `devsweep` エンジン + アイコンをバンドルし、15ロケール分の `.lproj` フォルダを生成してアプリに ad-hoc 署名を行う。**universal binary**(Apple Silicon + Intel)でビルドされ、macOS 14 以降に対応。
 
 ---
 

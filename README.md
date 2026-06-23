@@ -85,7 +85,7 @@ ln -s "$PWD/devsweep" ~/.local/bin/devsweep
 open DevSweep.app
 ```
 
-`build.sh` compiles `Sources/*.swift` with `swiftc`, bundles `Info.plist` + the verified `devsweep` engine + icons, generates `.lproj` folders for 15 locales, and ad-hoc signs the app. Target is macOS 14+ on Apple Silicon.
+`build.sh` compiles `Sources/*.swift` with `swiftc`, bundles `Info.plist` + the verified `devsweep` engine + icons, generates `.lproj` folders for 15 locales, and ad-hoc signs the app. Builds a **universal binary** (Apple Silicon + Intel) for macOS 14+.
 
 ---
 

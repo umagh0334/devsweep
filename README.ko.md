@@ -85,7 +85,7 @@ ln -s "$PWD/devsweep" ~/.local/bin/devsweep
 open DevSweep.app
 ```
 
-`build.sh`는 `swiftc`로 `Sources/*.swift`를 컴파일하고, `Info.plist`와 검증된 `devsweep` 엔진, 아이콘을 번들로 묶습니다. 15개 로케일용 `.lproj` 폴더를 생성하고 앱을 ad-hoc 서명합니다. 빌드 타겟은 Apple Silicon macOS 14 이상입니다.
+`build.sh`는 `swiftc`로 `Sources/*.swift`를 컴파일하고, `Info.plist`와 검증된 `devsweep` 엔진, 아이콘을 번들로 묶습니다. 15개 로케일용 `.lproj` 폴더를 생성하고 앱을 ad-hoc 서명합니다. **universal binary**(Apple Silicon + Intel)로 빌드되어 macOS 14 이상을 지원합니다.
 
 ---
 
