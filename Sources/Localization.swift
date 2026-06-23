@@ -5,11 +5,10 @@ import SwiftUI
 /// 언어 전환은 @AppStorage("language") → environment(\.appLanguage) → 뷰 재평가로 즉시 반영.
 
 enum AppLanguage: String, CaseIterable, Identifiable {
-    case en, ko, ja
+    // ISO 639 언어 코드 알파벳순 (picker 표시 순서 = allCases). rawValue 는 유지돼 저장값 호환.
+    case de, en, es, fr, hr, id, it, ja, ko, pl, pt, th, vi
     case zhHans = "zh-Hans"
     case zhHant = "zh-Hant"
-    case th, vi, it, fr, es, pt, hr
-    case de, pl, id
 
     var id: String { rawValue }
 
@@ -335,5 +334,6 @@ enum L10n {
         "about.totalReclaimed": [.en:"Total reclaimed", .ko:"총 회수한 용량", .ja:"回収した合計容量", .zhHans:"已回收总量", .zhHant:"已回收總量", .th:"กู้คืนแล้วทั้งหมด", .vi:"Tổng đã thu hồi", .it:"Totale recuperato", .fr:"Total récupéré", .es:"Total recuperado", .pt:"Total recuperado", .hr:"Ukupno vraćeno", .de:"Insgesamt zurückgewonnen", .pl:"Łącznie odzyskano", .id:"Total telah dipulihkan"],
         "about.license": [.en:"License", .ko:"저작권", .ja:"ライセンス", .zhHans:"许可证", .zhHant:"授權", .th:"สัญญาอนุญาต", .vi:"Giấy phép", .it:"Licenza", .fr:"Licence", .es:"Licencia", .pt:"Licença", .hr:"Licenca", .de:"Lizenz", .pl:"Licencja", .id:"Lisensi"],
         "about.author": [.en:"Author", .ko:"제작자", .ja:"制作者", .zhHans:"作者", .zhHant:"作者", .th:"ผู้สร้าง", .vi:"Tác giả", .it:"Autore", .fr:"Auteur", .es:"Autor", .pt:"Autor", .hr:"Autor", .de:"Autor", .pl:"Autor", .id:"Penulis"],
+        "about.translators": [.en:"Translation thanks to", .ko:"번역에 도움 주신 분들", .ja:"翻訳協力", .zhHans:"翻译鸣谢", .zhHant:"翻譯鳴謝", .th:"ขอบคุณผู้แปล", .vi:"Cảm ơn người dịch", .it:"Grazie ai traduttori", .fr:"Merci aux traducteurs", .es:"Gracias a los traductores", .pt:"Agradecimento aos tradutores", .hr:"Hvala prevoditeljima", .de:"Dank an die Übersetzer", .pl:"Podziękowania dla tłumaczy", .id:"Terima kasih penerjemah"],
     ]
 }
