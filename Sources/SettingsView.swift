@@ -581,6 +581,7 @@ struct AboutSettings: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("totalReclaimedKB") private var totalReclaimedKB = 0
     @State private var updater = UpdateChecker()
+    @State private var installer = Updater()
 
     /// 번역 크레딧 (이스터에그 — 가상의 현지 번역가들). ISO 639 코드순.
     private static let credits: [(lang: String, name: String, nick: String)] = [
@@ -677,15 +678,47 @@ struct AboutSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button(tr("about.checkUpdate", lang)) { Task { await updater.check() } }.controlSize(.small)
             }
-        case .updateAvailable(let tag, let url):
-            Button { openURL(url) } label: {
-                Label(tr("about.updateAvailFmt", lang, tag), systemImage: "arrow.down.circle.fill")
-            }
-            .controlSize(.small).tint(Theme.heavy)
+        case .updateAvailable(let tag, let url, let asset):
+            updateAvailableView(tag: tag, page: url, asset: asset)
         case .failed:
             HStack(spacing: 6) {
-                Text(tr("about.updateFailed", lang)).font(.caption).foregroundStyle(Theme.heavy)
+                Text(tr("about.updateFailed", lang)).font(.caption).foregroundStyle(Theme.danger)
                 Button(tr("about.checkUpdate", lang)) { Task { await updater.check() } }.controlSize(.small)
+            }
+        }
+    }
+
+    /// 업데이트 있음 — installer.phase 진행에 따라 [설치] 버튼 / 다운로드·설치 중 / 실패 재시도 표시.
+    @ViewBuilder
+    private func updateAvailableView(tag: String, page: URL, asset: URL?) -> some View {
+        switch installer.phase {
+        case .idle:
+            HStack(spacing: 6) {
+                if let asset {
+                    Button { Task { await installer.install(from: asset) } } label: {
+                        Label(tr("about.installFmt", lang, tag), systemImage: "arrow.down.circle.fill")
+                    }
+                    .controlSize(.small).buttonStyle(.borderedProminent).tint(Theme.sweep)
+                }
+                Button { openURL(page) } label: { Image(systemName: "safari") }
+                    .controlSize(.small).help(tr("about.openRelease", lang))
+            }
+        case .working:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small).scaleEffect(0.7)
+                Text(tr("about.downloading", lang)).font(.caption).foregroundStyle(.secondary)
+            }
+        case .relaunching:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small).scaleEffect(0.7)
+                Text(tr("about.installing", lang)).font(.caption).foregroundStyle(.secondary)
+            }
+        case .failed(let msg):
+            HStack(spacing: 6) {
+                Text(tr("about.updateFailed", lang)).font(.caption).foregroundStyle(Theme.danger).help(msg)
+                if let asset {
+                    Button(tr("about.retry", lang)) { Task { await installer.install(from: asset) } }.controlSize(.small)
+                }
             }
         }
     }

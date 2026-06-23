@@ -11,7 +11,7 @@ final class UpdateChecker {
         case checking
         case upToDate
         case noRelease   // releases/latest 404 — 아직 공개 릴리스 없음(또는 비공개 repo)
-        case updateAvailable(tag: String, url: URL)
+        case updateAvailable(tag: String, url: URL, asset: URL?)   // asset = .app.zip 직접 다운로드 URL
         case failed
     }
     var status: Status = .idle
@@ -30,8 +30,11 @@ final class UpdateChecker {
             let rel = try JSONDecoder().decode(GHRelease.self, from: data)
             let latest = rel.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
             let url = URL(string: rel.htmlURL) ?? AppInfo.releasesURL
+            // .app.zip asset 의 직접 다운로드 URL (자동 설치용). 없으면 nil → 릴리스 페이지 링크만.
+            let asset = rel.assets.first { $0.name.hasSuffix(".app.zip") }
+                .flatMap { URL(string: $0.browserDownloadURL) }
             status = Self.isNewer(latest, than: AppInfo.version)
-                ? .updateAvailable(tag: rel.tagName, url: url)
+                ? .updateAvailable(tag: rel.tagName, url: url, asset: asset)
                 : .upToDate
         } catch {
             status = .failed
@@ -54,8 +57,18 @@ final class UpdateChecker {
 private struct GHRelease: Decodable {
     let tagName: String
     let htmlURL: String
+    let assets: [Asset]
+    struct Asset: Decodable {
+        let name: String
+        let browserDownloadURL: String
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
+    }
     enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
         case htmlURL = "html_url"
+        case assets
     }
 }
