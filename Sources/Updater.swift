@@ -40,7 +40,10 @@ final class Updater {
                 throw UpdaterError.message("압축 해제 후 DevSweep.app 을 찾을 수 없음")
             }
 
-            // 3) quarantine 제거 — ad-hoc 서명이라, 떼면 Gatekeeper 검사 없이 바로 열린다
+            // 3) 최소 검증 — 손상/엉뚱한 앱/다운그레이드 차단(실패 시 throw, 교체 안 함)
+            try verify(newApp)
+
+            // 4) quarantine 제거 — ad-hoc 서명이라, 떼면 Gatekeeper 검사 없이 바로 열린다
             try? runTool("/usr/bin/xattr", ["-dr", "com.apple.quarantine", newApp.path])
 
             // 4) 교체·재실행 헬퍼: 앱(PID) 종료 대기 → 백업 → 교체 → (실패 시 롤백) → open
@@ -94,6 +97,24 @@ final class Updater {
         try p.run(); p.waitUntilExit()
         guard p.terminationStatus == 0 else {
             throw UpdaterError.message("\((launch as NSString).lastPathComponent) 실패 (코드 \(p.terminationStatus))")
+        }
+    }
+
+    /// 받은 앱 최소 검증 — codesign 유효성(손상) + 번들 ID 일치 + 버전 실제 상승.
+    /// ad-hoc 서명이라 '서명 주체 고정' 검증은 불가(완전 방어 아님)지만, 손상·엉뚱한 앱·
+    /// 다운그레이드를 막아 명백한 사고는 차단한다. (강한 방어는 Developer ID + notarization 필요)
+    private func verify(_ app: URL) throws {
+        try runTool("/usr/bin/codesign", ["--verify", "--deep", app.path])
+        let info = app.appendingPathComponent("Contents/Info.plist")
+        guard let d = NSDictionary(contentsOf: info) else {
+            throw UpdaterError.message("업데이트 Info.plist 를 읽을 수 없음")
+        }
+        guard d["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier else {
+            throw UpdaterError.message("번들 ID 불일치 — 신뢰할 수 없는 업데이트")
+        }
+        let newVer = d["CFBundleShortVersionString"] as? String ?? "0"
+        guard UpdateChecker.isNewer(newVer, than: AppInfo.version) else {
+            throw UpdaterError.message("버전이 더 높지 않음 (\(newVer))")
         }
     }
 

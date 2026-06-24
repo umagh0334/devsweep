@@ -41,13 +41,13 @@
 
 ## 카테고리 (31개)
 
-**Safe** (24개 — 기본 정리에 포함):
+**Safe** (21개 — 기본 정리에 포함):
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `maven` `cocoapods` `swiftpm` `composer` `nuget` `deno` `pub` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
 
-**Heavy** (7개 — 재다운로드 비용이 크므로 명시적으로 지정하거나 `all` 사용 시만 정리):
+**Heavy** (10개 — 재다운로드 비용이 크므로 명시적으로 지정하거나 `all` 사용 시만 정리):
 
-`docker` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
 
 ---
 

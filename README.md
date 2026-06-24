@@ -41,13 +41,13 @@ Ships as both a **CLI** (`devsweep`, a single bash script) and a **native macOS 
 
 ## Categories (31)
 
-**Safe** (24 — included in the default sweep):
+**Safe** (21 — included in the default sweep):
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `maven` `cocoapods` `swiftpm` `composer` `nuget` `deno` `pub` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
 
-**Heavy** (7 — costly to re-download, cleared only when named or via `all`):
+**Heavy** (10 — costly to re-download, cleared only when named or via `all`):
 
-`docker` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
 
 ---
 

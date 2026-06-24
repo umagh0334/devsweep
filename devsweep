@@ -25,10 +25,12 @@ set -euo pipefail
 #    SAFE_CATS  : `clean`/`clean all`에 포함되는 기본 안전 카테고리
 #    HEAVY_CATS : 재설치/재다운로드 비용이 큰 것 — 이름을 직접 지정해야만 정리
 # ─────────────────────────────────────────────────────────────
-SAFE_CATS=(gradle npm yarn pnpm bun pip uv cargo go maven cocoapods swiftpm composer nuget deno pub brew colima xcode vscode cursor zed codemate)
-# docker 는 prune 이 중지 컨테이너/네트워크/빌드캐시까지 지우는 '상태성 큰' 작업이라
-# 기본 clean·자동정리(SAFE 전체)에 넣지 않는다. HEAVY 로 둬서 이름/‘all’ 지정 때만 정리.
-HEAVY_CATS=(docker playwright rustup-targets xcode-sim huggingface jetbrains androidstudio codex)
+SAFE_CATS=(gradle npm yarn pnpm bun pip uv cargo go cocoapods swiftpm composer nuget deno brew colima xcode vscode cursor zed codemate)
+# 기본 clean·자동정리(SAFE 전체)에서 제외하고 이름/‘all’ 지정 때만 정리하는 항목:
+#   - docker : prune 이 중지 컨테이너/네트워크/빌드캐시까지 지우는 '상태성 큰' 작업
+#   - maven  : ~/.m2/repository 에 'mvn install' 한 로컬/사내 SNAPSHOT 이 섞여 재다운로드 불가할 수 있음
+#   - pub    : ~/.pub-cache 에 flutter 로컬 패키지 등 원격에 없는 artifact 가 섞일 수 있음
+HEAVY_CATS=(docker maven pub playwright rustup-targets xcode-sim huggingface jetbrains androidstudio codex)
 # 네이티브 cleanup 명령(또는 prune)으로 정리되는 카테고리 — 나이 필터(--older-than) 미적용
 NATIVE_CATS=(npm yarn pnpm pip uv brew docker rustup-targets go nuget xcode-sim)
 # 경로가 없어(VM/메타데이터) 나이 필터(--older-than) 측정·정리가 불가능한 카테고리

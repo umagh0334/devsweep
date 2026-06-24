@@ -41,13 +41,13 @@
 
 ## カテゴリ（31）
 
-**Safe**（24 ——デフォルトのスイープ対象）:
+**Safe**（21 ——デフォルトのスイープ対象）:
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `maven` `cocoapods` `swiftpm` `composer` `nuget` `deno` `pub` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
 
-**Heavy**（7 ——再ダウンロードコストが高く、明示指定または `all` でのみ削除）:
+**Heavy**（10 ——再ダウンロードコストが高く、明示指定または `all` でのみ削除）:
 
-`docker` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
 
 ---
 

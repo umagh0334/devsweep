@@ -32,7 +32,7 @@ final class Engine {
 
     /// `devsweep --json`을 돌려 카테고리 목록을 갱신한다.
     func scan() async {
-        guard !isScanning else { return }
+        guard !isScanning, !isCleaning else { return }   // 정리 중엔 동시 스캔 차단(상태 꼬임 방지)
         isScanning = true; errorMessage = nil
         defer { isScanning = false }
 
@@ -85,6 +85,7 @@ final class Engine {
         }
         // 정리 직전 측정값 = 회수 예상치 (정보성 누적용)
         let freedKB = categories.filter { names.contains($0.name) }.reduce(0) { $0 + $1.sizeKB }
+        var cleanError: String?
         do {
             lastLog = try await run([path, "clean", "--yes"] + names + ageArgs)
             let prev = UserDefaults.standard.integer(forKey: "totalReclaimedKB")
@@ -94,10 +95,11 @@ final class Engine {
                 Notifier.cleanDone(reclaimedKB: freedKB)
             }
         } catch {
-            errorMessage = "정리 실패: \(error.localizedDescription)"
+            cleanError = "정리 실패: \(error.localizedDescription)"
         }
         isCleaning = false
-        await scan()   // scan()이 detailCache.removeAll() 수행
+        await scan()   // scan()이 detailCache.removeAll() 수행 (성공 시 errorMessage=nil 로 덮음)
+        if let cleanError { errorMessage = cleanError }   // 재스캔이 지워도 정리 실패는 남긴다
     }
 
     /// 카테고리 선택(정리 대상) 토글 — 마스터 행 체크박스용 (정렬과 무관하게 이름으로 갱신).
@@ -167,10 +169,17 @@ final class Engine {
                 proc.standardError = errPipe
                 do {
                     try proc.run()
-                    // waitUntilExit 전에 두 파이프를 끝까지 비운다 — 출력이 파이프 버퍼(≈64KB)를
-                    // 넘으면 안 읽힌 쪽이 가득 차 자식이 블록되고 데드락이 난다.
+                    // 두 파이프를 동시에 비운다 — 순차로 읽으면 한쪽(예: stderr)이 버퍼(≈64KB)를
+                    // 먼저 채울 때 자식이 그 write 에서 블록되고, 안 읽힌 쪽 EOF 가 안 와 데드락이 난다.
+                    var errData = Data()
+                    let errGroup = DispatchGroup()
+                    errGroup.enter()
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                        errGroup.leave()
+                    }
                     let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    errGroup.wait()
                     proc.waitUntilExit()
                     guard proc.terminationStatus == 0 else {
                         let err = String(decoding: errData, as: UTF8.self)

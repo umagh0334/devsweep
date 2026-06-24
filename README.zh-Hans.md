@@ -41,13 +41,13 @@
 
 ## 类别（31 个）
 
-**安全类**（24 个——包含在默认清理范围内）：
+**安全类**（21 个——包含在默认清理范围内）：
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `maven` `cocoapods` `swiftpm` `composer` `nuget` `deno` `pub` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
 
-**重量类**（7 个——重新下载成本较高，只有显式指定或使用 `all` 时才会清理）：
+**重量类**（10 个——重新下载成本较高，只有显式指定或使用 `all` 时才会清理）：
 
-`docker` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
 
 ---
 
