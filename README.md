@@ -119,6 +119,26 @@ devsweep/
 
 ---
 
+## First launch — Gatekeeper
+
+DevSweep is **ad-hoc signed** (not notarized), so macOS Gatekeeper blocks it on first launch — and on recent macOS, "right-click → Open" is often not enough. Allow it one of two ways:
+
+**Terminal (most reliable)** — strip the quarantine attribute:
+
+```bash
+xattr -dr com.apple.quarantine /path/to/DevSweep.app
+```
+
+Then double-click as usual. You only need this once per download — the in-app auto-update strips quarantine automatically.
+
+**System Settings** — right after the block: **System Settings → Privacy & Security → "Open Anyway"**.
+
+> Seeing *"DevSweep is damaged and can't be opened"*? Same Gatekeeper block — the `xattr` command above clears it.
+
+For open-on-double-click distribution to everyone, the app would need an Apple Developer ID signature + notarization (paid).
+
+---
+
 ## License
 
 MIT License. Icons from the [Iconify Solar](https://icon-sets.iconify.design/solar/) set.

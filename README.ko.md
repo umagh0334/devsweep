@@ -119,6 +119,26 @@ devsweep/
 
 ---
 
+## 첫 실행 — Gatekeeper
+
+DevSweep은 **ad-hoc 서명**(공증 없음)이라 macOS Gatekeeper가 첫 실행을 차단합니다 — 최신 macOS에서는 "우클릭 → 열기"로도 안 되는 경우가 많습니다. 둘 중 한 방법으로 허용하세요:
+
+**터미널 (가장 확실)** — quarantine 속성 제거:
+
+```bash
+xattr -dr com.apple.quarantine /경로/DevSweep.app
+```
+
+그 다음 평소대로 더블클릭하면 됩니다. 다운로드당 한 번만 하면 되며, 앱 내 자동 업데이트는 quarantine을 자동으로 제거합니다.
+
+**시스템 설정** — 차단 직후: **시스템 설정 → 개인정보 보호 및 보안 → "확인 없이 열기"**.
+
+> *"DevSweep이(가) 손상되었기 때문에 열 수 없습니다"* 가 떠도 같은 Gatekeeper 차단입니다 — 위 `xattr` 명령으로 해결됩니다.
+
+받자마자 더블클릭으로 열리는 배포를 원하면 Apple Developer ID 서명 + 공증(유료)이 필요합니다.
+
+---
+
 ## 라이선스
 
 MIT License. 아이콘은 [Iconify Solar](https://icon-sets.iconify.design/solar/) 세트를 사용합니다.

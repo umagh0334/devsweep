@@ -119,6 +119,26 @@ devsweep/
 
 ---
 
+## 首次啟動 — Gatekeeper
+
+DevSweep 為 **ad-hoc 簽署**（未公證），因此 macOS Gatekeeper 會攔截首次啟動 —— 在較新的 macOS 上，「右鍵 → 開啟」往往也不夠。可用以下兩種方式之一放行：
+
+**終端機（最可靠）** —— 移除 quarantine 屬性：
+
+```bash
+xattr -dr com.apple.quarantine /路徑/DevSweep.app
+```
+
+接著照常雙擊即可啟動。每次下載只需執行一次 —— 應用程式內的自動更新會自動移除 quarantine。
+
+**系統設定** —— 攔截後立即前往：**系統設定 → 隱私權與安全性 → 「仍要開啟」**。
+
+> 看到 *「DevSweep 已損毀，無法打開」*？這同樣是 Gatekeeper 攔截 —— 用上面的 `xattr` 指令即可解除。
+
+若要讓任何人下載後雙擊即可開啟，應用程式需要 Apple Developer ID 簽署 + 公證（付費）。
+
+---
+
 ## 授權
 
 MIT License。圖示來自 [Iconify Solar](https://icon-sets.iconify.design/solar/) 圖示集。

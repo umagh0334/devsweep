@@ -119,6 +119,26 @@ devsweep/
 
 ---
 
+## 初回起動 — Gatekeeper
+
+DevSweep は **ad-hoc 署名**(notarization なし)のため、macOS Gatekeeper が初回起動をブロックします — 最近の macOS では「右クリック → 開く」でも回避できないことが多いです。次のいずれかで許可してください:
+
+**ターミナル (最も確実)** — quarantine 属性を削除:
+
+```bash
+xattr -dr com.apple.quarantine /パス/DevSweep.app
+```
+
+あとは通常どおりダブルクリックで起動します。ダウンロードごとに1回だけで済み、アプリ内の自動アップデートは quarantine を自動的に削除します。
+
+**システム設定** — ブロック直後に: **システム設定 → プライバシーとセキュリティ → 「このまま開く」**。
+
+> *「DevSweep は壊れているため開けません」* と表示されても同じ Gatekeeper のブロックです — 上記の `xattr` コマンドで解決します。
+
+誰でもダブルクリックで開ける配布には、Apple Developer ID 署名 + notarization(有料)が必要です。
+
+---
+
 ## ライセンス
 
 MIT License. アイコンは [Iconify Solar](https://icon-sets.iconify.design/solar/) セットより。
