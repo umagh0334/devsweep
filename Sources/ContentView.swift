@@ -175,6 +175,19 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(selectable.isEmpty)
+
+            // 추천 선택 — 안전셋(SAFE·!heavy·hasSize·!protected)만 한 방에 고름. HEAVY 제외라 무지성 전체선택과 구분.
+            Button { withAnimation(.snappy(duration: 0.18)) { engine.setRecommended() } } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "sparkles").foregroundStyle(Theme.sweep)
+                    Text(tr("select.recommended", lang))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(selectable.isEmpty)
+            .help(tr("select.recommendedHelp", lang))
+
             Spacer()
             if !selectable.isEmpty {
                 Text("\(selectedCount) / \(selectable.count)")

@@ -53,14 +53,17 @@ echo "  · ad-hoc 코드사이닝"
 codesign --force --sign - "$APP" >/dev/null 2>&1 || echo "    (사이닝 생략됨)"
 
 # 5) 릴리스용 zip (--zip / --release 플래그 시) — GitHub 릴리스 asset · 자체 업데이트 다운로드용.
-#    ditto 로 앱 번들 메타데이터/심볼릭링크/서명 보존 압축 (일반 zip 으론 깨질 수 있음).
+#    ditto 로 앱 번들 심볼릭링크/서명 보존 압축 (일반 zip 으론 깨질 수 있음).
+#    --norsrc --noextattr --noqtn: 확장속성(특히 Ventura+ 가 자동으로 붙이는 com.apple.provenance)을
+#    아카이브에 넣지 않아 zip 안에 ._* AppleDouble 잡파일이 안 생긴다. ad-hoc 서명은 _CodeSignature/
+#    바이너리에 저장돼 xattr 와 무관 → 라운드트립 후에도 codesign --verify 통과(실측 확인).
 case " $* " in
   *" --zip "*|*" --release "*)
     VER=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo dev)
     ZIP="$ROOT/DevSweep-$VER.app.zip"
     echo "  · 릴리스 zip 생성 (v$VER)"
     rm -f "$ROOT"/DevSweep-*.app.zip
-    ditto -c -k --keepParent "$APP" "$ZIP"
+    ditto -c -k --keepParent --norsrc --noextattr --noqtn "$APP" "$ZIP"
     echo "✓ zip: $ZIP ($(du -h "$ZIP" | awk '{print $1}' | tr -d ' '))"
     ;;
 esac

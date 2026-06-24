@@ -21,7 +21,7 @@ struct SettingsView: View {
         .onAppear {
             // 설정창도 매번 화면 중앙 (메인과 동일 — 복원 위치를 덮어씀). title 로 설정창만 골라냄.
             DispatchQueue.main.async {
-                NSApp.windows.first(where: { $0.title == "DevSweep 설정" })?.center()
+                NSApp.windows.first(where: { $0.title == tr("window.settings", .systemDefault) })?.center()
             }
             if appState.requestUpdateCheck { section = .about }   // 메뉴로 열렸으면 정보 탭
         }
@@ -667,11 +667,17 @@ struct AboutSettings: View {
         }
         .formStyle(.grouped)
         .task {
-            // 메뉴 "업데이트 확인…" 으로 열렸으면 자동 체크 (플래그 1회 소비)
+            // 콜드 오픈(설정창이 새로 뜨며 정보탭이 처음 렌더)일 때 자동 체크 — 플래그 1회 소비
             if appState.requestUpdateCheck {
                 appState.requestUpdateCheck = false
                 await updater.check()
             }
+        }
+        .onChange(of: appState.requestUpdateCheck) { _, req in
+            // 설정창이 이미 정보탭에 떠 있으면 .task 가 재실행되지 않으므로, 플래그 변화를 직접 받아 체크.
+            guard req else { return }
+            appState.requestUpdateCheck = false
+            Task { await updater.check() }
         }
     }
 

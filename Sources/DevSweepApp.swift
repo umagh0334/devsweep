@@ -59,7 +59,7 @@ struct DevSweepApp: App {
         }
 
         // 별도 설정 창 — 화면 중앙에 띄움(우측 갑툭튀 방지), 시스템설정 스타일
-        Window("DevSweep 설정", id: "settings") {
+        Window(tr("window.settings", .systemDefault), id: "settings") {
             SettingsView(engine: engine)
                 .environment(\.appLanguage, lang)
                 .environment(appState)

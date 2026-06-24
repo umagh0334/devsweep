@@ -30,6 +30,11 @@ final class Engine {
         return d > 0 ? ["--older-than=\(d)d"] : []
     }
 
+    /// 에러 배너용 표시 언어 — 사용자가 앱에서 고른 언어, 없으면 시스템 추정 (DevSweepApp.lang 과 동일 규칙).
+    private var uiLang: AppLanguage {
+        AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .systemDefault
+    }
+
     /// `devsweep --json`을 돌려 카테고리 목록을 갱신한다.
     func scan() async {
         guard !isScanning, !isCleaning else { return }   // 정리 중엔 동시 스캔 차단(상태 꼬임 방지)
@@ -37,7 +42,7 @@ final class Engine {
         defer { isScanning = false }
 
         guard let path = enginePath else {
-            errorMessage = "devsweep 엔진을 번들에서 찾을 수 없음"; return
+            errorMessage = tr("err.engineMissing", uiLang); return
         }
         do {
             let out = try await run([path, "--json"] + ageArgs)
@@ -56,7 +61,7 @@ final class Engine {
             detailCache.removeAll()   // 용량이 갱신됐으니 stale 상세 무효화
             detailRevision &+= 1      // 같은 항목 선택 상태에서도 상세 패널 재로드 트리거
         } catch {
-            errorMessage = "스캔 실패: \(error.localizedDescription)"
+            errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
         }
     }
 
@@ -70,7 +75,7 @@ final class Engine {
             let out = try await run([path, "detail", name] + ageArgs)
             detailCache[name] = try JSONDecoder().decode(CategoryDetail.self, from: Data(out.utf8))
         } catch {
-            errorMessage = "상세 로드 실패(\(name)): \(error.localizedDescription)"
+            errorMessage = tr("err.detailFmt", uiLang, name, error.localizedDescription)
         }
     }
 
@@ -81,7 +86,7 @@ final class Engine {
         isCleaning = true; errorMessage = nil
 
         guard let path = enginePath else {
-            errorMessage = "devsweep 엔진을 찾을 수 없음"; isCleaning = false; return
+            errorMessage = tr("err.engineMissing", uiLang); isCleaning = false; return
         }
         // 정리 직전 측정값 = 회수 예상치 (정보성 누적용)
         let freedKB = categories.filter { names.contains($0.name) }.reduce(0) { $0 + $1.sizeKB }
@@ -95,7 +100,7 @@ final class Engine {
                 Notifier.cleanDone(reclaimedKB: freedKB)
             }
         } catch {
-            cleanError = "정리 실패: \(error.localizedDescription)"
+            cleanError = tr("err.cleanFmt", uiLang, error.localizedDescription)
         }
         isCleaning = false
         await scan()   // scan()이 detailCache.removeAll() 수행 (성공 시 errorMessage=nil 로 덮음)
@@ -114,6 +119,16 @@ final class Engine {
     func setAllSelected(_ value: Bool) {
         for i in categories.indices where categories[i].hasSize && !categories[i].protected {
             categories[i].selected = value
+        }
+    }
+
+    /// 추천 선택 — 안전하게 지워도 되고 실제 용량이 있는 항목만(SAFE·!heavy·hasSize·!protected).
+    /// HEAVY(docker·huggingface·xcode-sim 등 재다운로드 비쌈)·보호·0KB 는 제외. 전체 항목에 술어를
+    /// 적용해 기존 선택(수동 체크한 heavy 포함)을 추천셋으로 '교체'한다 — 토글 아닌 정규화.
+    func setRecommended() {
+        for i in categories.indices {
+            let c = categories[i]
+            categories[i].selected = !c.heavy && c.hasSize && !c.protected
         }
     }
 

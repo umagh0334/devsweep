@@ -18,6 +18,11 @@ final class Updater {
     }
     var phase: Phase = .idle
 
+    /// 실패 메시지 표시 언어 — 사용자 선택 언어, 없으면 시스템 추정 (Engine.uiLang 과 동일 규칙).
+    private var uiLang: AppLanguage {
+        AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .systemDefault
+    }
+
     func install(from assetURL: URL) async {
         phase = .working
         let fm = FileManager.default
@@ -28,7 +33,7 @@ final class Updater {
             // 1) zip 다운로드
             let (tmp, resp) = try await URLSession.shared.download(from: assetURL)
             if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
-                throw UpdaterError.message("다운로드 실패 (HTTP \(http.statusCode))")
+                throw UpdaterError.message(tr("err.downloadHttpFmt", uiLang, http.statusCode))
             }
             let zip = work.appendingPathComponent("update.zip")
             try fm.moveItem(at: tmp, to: zip)
@@ -37,7 +42,7 @@ final class Updater {
             try runTool("/usr/bin/ditto", ["-x", "-k", zip.path, work.path])
             let newApp = work.appendingPathComponent("DevSweep.app")
             guard fm.fileExists(atPath: newApp.path) else {
-                throw UpdaterError.message("압축 해제 후 DevSweep.app 을 찾을 수 없음")
+                throw UpdaterError.message(tr("err.extractMissing", uiLang))
             }
 
             // 3) 최소 검증 — 손상/엉뚱한 앱/다운그레이드 차단(실패 시 throw, 교체 안 함)
@@ -96,7 +101,7 @@ final class Updater {
         p.standardError = FileHandle.nullDevice
         try p.run(); p.waitUntilExit()
         guard p.terminationStatus == 0 else {
-            throw UpdaterError.message("\((launch as NSString).lastPathComponent) 실패 (코드 \(p.terminationStatus))")
+            throw UpdaterError.message(tr("err.toolFmt", uiLang, (launch as NSString).lastPathComponent, Int(p.terminationStatus)))
         }
     }
 
@@ -107,14 +112,14 @@ final class Updater {
         try runTool("/usr/bin/codesign", ["--verify", "--deep", app.path])
         let info = app.appendingPathComponent("Contents/Info.plist")
         guard let d = NSDictionary(contentsOf: info) else {
-            throw UpdaterError.message("업데이트 Info.plist 를 읽을 수 없음")
+            throw UpdaterError.message(tr("err.infoPlistUnreadable", uiLang))
         }
         guard d["CFBundleIdentifier"] as? String == Bundle.main.bundleIdentifier else {
-            throw UpdaterError.message("번들 ID 불일치 — 신뢰할 수 없는 업데이트")
+            throw UpdaterError.message(tr("err.bundleMismatch", uiLang))
         }
         let newVer = d["CFBundleShortVersionString"] as? String ?? "0"
         guard UpdateChecker.isNewer(newVer, than: AppInfo.version) else {
-            throw UpdaterError.message("버전이 더 높지 않음 (\(newVer))")
+            throw UpdaterError.message(tr("err.notNewerFmt", uiLang, newVer))
         }
     }
 
