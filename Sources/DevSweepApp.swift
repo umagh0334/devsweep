@@ -1,11 +1,13 @@
 import SwiftUI
 import AppKit
+import Observation
 
 @main
 struct DevSweepApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate   // 알림 권한·포그라운드 배너
     /// 메인 창과 환경설정 창이 같은 Engine 을 공유 (보호 토글 → 메인 즉시 반영)
     @State private var engine = Engine()
+    @State private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("appearance") private var appearance = 0   // 0=시스템 1=라이트 2=다크
     @AppStorage("language") private var languageRaw = ""   // 빈값이면 시스템 언어 추정
@@ -32,6 +34,7 @@ struct DevSweepApp: App {
         WindowGroup("DevSweep") {
             ContentView(engine: engine)
                 .environment(\.appLanguage, lang)
+                .environment(appState)
                 .onChange(of: appearance) { _, _ in applyAppearance() }
                 .task {
                     // 콜드 런치 시 1회(.onChange 는 초기값엔 미발동) — 외관 적용 + 자동 정리 합산 + self-heal
@@ -49,6 +52,8 @@ struct DevSweepApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .commands {
+            // "DevSweep 에 관하여" 아래에 "업데이트 확인…" — macOS 표준 위치
+            CommandGroup(after: .appInfo) { UpdateMenuButton(appState: appState) }
             // Settings scene 을 안 쓰므로 Cmd+, 를 직접 배선 (별도 창 열기)
             CommandGroup(replacing: .appSettings) { OpenSettingsButton() }
         }
@@ -57,6 +62,7 @@ struct DevSweepApp: App {
         Window("DevSweep 설정", id: "settings") {
             SettingsView(engine: engine)
                 .environment(\.appLanguage, lang)
+                .environment(appState)
         }
         .defaultPosition(.center)
         .windowResizability(.contentSize)
@@ -69,5 +75,23 @@ private struct OpenSettingsButton: View {
     var body: some View {
         Button(tr("menu.settings", .systemDefault)) { openWindow(id: "settings") }
             .keyboardShortcut(",", modifiers: .command)
+    }
+}
+
+/// 윈도우 간 공유 상태 — 메뉴(별도 Scene)가 설정창 동작을 트리거하기 위함.
+@Observable final class AppState {
+    /// 메뉴 "업데이트 확인…" 이 켜면, 설정창이 정보 탭으로 전환하고 자동 체크한다.
+    var requestUpdateCheck = false
+}
+
+/// 앱 메뉴(About 아래) "업데이트 확인…" — 설정창 정보 탭을 열고 자동 체크를 건다.
+private struct UpdateMenuButton: View {
+    let appState: AppState
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button(tr("menu.checkUpdate", .systemDefault)) {
+            appState.requestUpdateCheck = true
+            openWindow(id: "settings")
+        }
     }
 }

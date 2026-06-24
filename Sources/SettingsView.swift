@@ -7,6 +7,7 @@ struct SettingsView: View {
     let engine: Engine
     @State private var section: SettingsSection = .general
     @Environment(\.appLanguage) private var lang
+    @Environment(AppState.self) private var appState
 
     var body: some View {
         HStack(spacing: 0) {
@@ -22,6 +23,10 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 NSApp.windows.first(where: { $0.title == "DevSweep 설정" })?.center()
             }
+            if appState.requestUpdateCheck { section = .about }   // 메뉴로 열렸으면 정보 탭
+        }
+        .onChange(of: appState.requestUpdateCheck) { _, req in
+            if req { section = .about }   // 이미 열려 있던 설정창도 정보 탭으로 전환
         }
     }
 
@@ -582,6 +587,7 @@ struct AboutSettings: View {
     @AppStorage("totalReclaimedKB") private var totalReclaimedKB = 0
     @State private var updater = UpdateChecker()
     @State private var installer = Updater()
+    @Environment(AppState.self) private var appState
 
     /// 번역 크레딧 (이스터에그 — 가상의 현지 번역가들). ISO 639 코드순.
     private static let credits: [(lang: String, name: String, nick: String)] = [
@@ -660,6 +666,13 @@ struct AboutSettings: View {
             }
         }
         .formStyle(.grouped)
+        .task {
+            // 메뉴 "업데이트 확인…" 으로 열렸으면 자동 체크 (플래그 1회 소비)
+            if appState.requestUpdateCheck {
+                appState.requestUpdateCheck = false
+                await updater.check()
+            }
+        }
     }
 
     @ViewBuilder private var updateControl: some View {
