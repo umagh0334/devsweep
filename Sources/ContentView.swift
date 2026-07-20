@@ -10,6 +10,7 @@ struct CleanRequest: Identifiable, Equatable {
     let sizeKB: Int
     let hasHeavy: Bool
     let isSingle: Bool
+    var isProject = false     // true 면 프로젝트 폴더 정리(engine.cleanProjects)
 }
 
 struct ContentView: View {
@@ -18,8 +19,14 @@ struct ContentView: View {
     @State private var cleanRequest: CleanRequest?
     @Environment(\.openWindow) private var openWindow
     @Environment(\.appLanguage) private var lang
+    @Environment(AppState.self) private var appState
     @AppStorage("autoScan") private var autoScan = true
     @AppStorage("olderThanDays") private var olderThanDays = 0
+    @AppStorage("sortMode") private var sortMode = 0     // 0=크기순(기본) 1=이름순
+    @AppStorage("deleteMode") private var deleteMode = 0 // 0=휴지통(기본·복구가능) 1=완전삭제
+    @AppStorage("appMode") private var appMode = 0       // 0=캐시 1=프로젝트 폴더 스캐너
+    @State private var scanRoot = ""                     // 프로젝트 스캔 위치(빈값=홈)
+    @State private var projOldOnly = false               // 30일+ 미사용만 표시
 
     private var totalKB: Int { engine.categories.filter { !$0.protected }.reduce(0) { $0 + $1.sizeKB } }
     private var selectedKB: Int { engine.categories.filter(\.selected).reduce(0) { $0 + $1.sizeKB } }
@@ -27,22 +34,46 @@ struct ContentView: View {
     private var selectedHasHeavy: Bool { engine.categories.contains { $0.selected && $0.heavy } }
     /// 정리 가능(용량 있음 + 보호 안 됨), 용량 내림차순 — 분포 바·색·자동선택의 기준
     private var ranked: [CacheCategory] { engine.categories.filter { $0.hasSize && !$0.protected }.sorted { $0.sizeKB > $1.sizeKB } }
+    /// 마스터 리스트 표시 순서 — 정렬 토글(0=크기순=ranked, 1=이름순). 색상 rank 는 항상 크기 기준(ranked)이라
+    /// 여기서 순서만 바꿔도 행 색·분포 바는 용량 의미를 유지한다.
+    private var sortedActive: [CacheCategory] {
+        sortMode == 1 ? ranked.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending } : ranked
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             if let err = engine.errorMessage { errorBanner(err) }
-            HSplitView {
-                masterList
-                    .frame(minWidth: 300, idealWidth: 332, maxWidth: 440)
-                detailPanel
-                    .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+            if appMode == 1 {
+                projectScanView
+            } else {
+                HSplitView {
+                    masterList
+                        .frame(minWidth: 300, idealWidth: 332, maxWidth: 440)
+                    detailPanel
+                        .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+                }
+                footer
             }
-            footer
         }
         .frame(width: 900, height: 620)
         .overlay { cleanConfirmOverlay }
+        .overlay { cleanProgressOverlay }
         .animation(.snappy(duration: 0.22), value: cleanRequest)
+        .animation(.snappy(duration: 0.25), value: engine.showCleanProgress)
+        .animation(.snappy(duration: 0.2), value: engine.cleanItems)
+        .onChange(of: appState.requestCleanRecommended) { _, req in
+            // 메뉴바 "안전셋 정리…" → 캐시 모드로 전환·추천셋 선택·확인창 표시
+            guard req else { return }
+            appState.requestCleanRecommended = false
+            appMode = 0
+            engine.setRecommended()
+            let sel = engine.categories.filter(\.selected)
+            guard !sel.isEmpty else { return }
+            cleanRequest = CleanRequest(targets: nil, title: "", count: sel.count,
+                                        sizeKB: sel.reduce(0) { $0 + $1.sizeKB },
+                                        hasHeavy: sel.contains { $0.heavy }, isSingle: false)
+        }
         .tint(Theme.sweep)
         .onAppear {
             // 매 실행 화면 중앙 (복원된 위치를 덮어씀). .background(NSView)는 윈도우 생성을 깨므로 onAppear 사용.
@@ -51,6 +82,12 @@ struct ContentView: View {
             }
         }
         .task { if autoScan { await engine.scan() } }
+        .task(id: appMode) {
+            // 프로젝트 모드 첫 진입 시 홈을 자동 스캔 (기본 자동, 이후 폴더 지정 가능)
+            if appMode == 1, engine.projectDirs.isEmpty, engine.projectScanRoot.isEmpty, !engine.isScanningProjects {
+                await engine.scanProjects(root: "~")
+            }
+        }
         .task(id: engine.categories.count) {
             if selectedDetail == nil { selectedDetail = ranked.first?.name }
         }
@@ -79,17 +116,25 @@ struct ContentView: View {
                     }
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(tr("recoverable", lang)).font(.caption2).foregroundStyle(.secondary)
-                        .textCase(.uppercase).tracking(0.6)
-                    Text(humanKB(totalKB))
-                        .font(.system(size: 30, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Theme.sweep)
-                        .contentTransition(.numericText())
-                        .animation(.snappy, value: totalKB)
+                // 모드 전환 — 캐시 정리 / 프로젝트 폴더 스캐너
+                Picker("", selection: $appMode) {
+                    Text(tr("mode.cache", lang)).tag(0)
+                    Text(tr("mode.projects", lang)).tag(1)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.regular)
+                if appMode == 0 {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(tr("recoverable", lang)).font(.caption2).foregroundStyle(.secondary)
+                            .textCase(.uppercase).tracking(0.6)
+                        Text(humanKB(totalKB))
+                            .font(.system(size: 30, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Theme.sweep)
+                            .contentTransition(.numericText())
+                            .animation(.snappy, value: totalKB)
+                    }
                 }
             }
-            distributionBar
+            if appMode == 0 { distributionBar }
         }
         .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 14)
         .background(.regularMaterial)
@@ -129,7 +174,7 @@ struct ContentView: View {
 
     // ── 마스터: 카테고리 리스트 (용량 있는 것 + 캐시 없음 섹션) ──
     private var masterList: some View {
-        let active = ranked
+        let active = sortedActive
         let protectedItems = engine.categories.filter(\.protected)
         let empty = engine.categories.filter { !$0.hasSize && !$0.protected }
         return VStack(spacing: 0) {
@@ -176,23 +221,52 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .disabled(selectable.isEmpty)
 
-            // 추천 선택 — 안전셋(SAFE·!heavy·hasSize·!protected)만 한 방에 고름. HEAVY 제외라 무지성 전체선택과 구분.
+            // 추천 선택 — 안전셋(SAFE·!heavy·hasSize·!protected)만 한 방에. 액센트 칩(틴트+테두리+포인터
+            // 커서)으로 '누르는 액션'임을 명확히 — 테두리 없는 HEAVY 뱃지/라벨과 혼동되지 않게.
             Button { withAnimation(.snappy(duration: 0.18)) { engine.setRecommended() } } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "sparkles").foregroundStyle(Theme.sweep)
+                HStack(spacing: 4) {
+                    Image(systemName: "sparkles").font(.system(size: 10))
                     Text(tr("select.recommended", lang))
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
                 }
+                .foregroundStyle(Theme.sweep)
+                .padding(.horizontal, 9).padding(.vertical, 3)
+                .background(Capsule().fill(Theme.sweep.opacity(0.14)))
+                .overlay(Capsule().strokeBorder(Theme.sweep.opacity(0.40), lineWidth: 1))
+                .contentShape(Capsule())
+                .opacity(selectable.isEmpty ? 0.45 : 1)
             }
             .buttonStyle(.plain)
             .disabled(selectable.isEmpty)
             .help(tr("select.recommendedHelp", lang))
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
 
             Spacer()
             if !selectable.isEmpty {
                 Text("\(selectedCount) / \(selectable.count)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
+            }
+            // 정렬 토글 — 크기순 ⇄ 이름순. 현재 모드를 표시하고 누르면 전환. 중립 칩(추천 액센트보다 조용)
+            // + 포인터 커서로 클릭 가능함을 명확히.
+            Button { withAnimation(.snappy(duration: 0.2)) { sortMode = sortMode == 0 ? 1 : 0 } } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.up.arrow.down").font(.system(size: 9))
+                    Text(tr(sortMode == 0 ? "sort.bySize" : "sort.byName", lang))
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(Color.primary.opacity(0.05)))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help(tr("sort.help", lang))
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 7)
@@ -356,6 +430,18 @@ struct ContentView: View {
                 .background(RoundedRectangle(cornerRadius: 9).fill(Theme.heavy.opacity(0.15)))
                 .padding(.horizontal, 22).padding(.top, 16)
             }
+            // 삭제 방식 — 휴지통(복구가능, 기본) / 완전삭제(영구). 정리 전에 선택, 마지막 선택 기억.
+            Picker("", selection: $deleteMode) {
+                Label(tr("delete.trash", lang), systemImage: "trash").tag(0)
+                Label(tr("delete.permanent", lang), systemImage: "trash.slash").tag(1)
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            .padding(.horizontal, 22).padding(.top, 18)
+            Text(deleteMode == 0 ? tr("delete.trashDesc", lang) : tr("delete.permanentDesc", lang))
+                .font(.caption)
+                .foregroundStyle(deleteMode == 0 ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.danger))
+                .padding(.top, 5)
+
             HStack(spacing: 10) {
                 Button { cleanRequest = nil } label: {
                     Text(tr("confirm.cancel", lang)).frame(maxWidth: .infinity)
@@ -364,9 +450,10 @@ struct ContentView: View {
                 Button { runClean(req) } label: {
                     Text(tr("confirm.clean", lang)).frame(maxWidth: .infinity).fontWeight(.semibold)
                 }
-                .controlSize(.large).buttonStyle(.borderedProminent).tint(accent)
+                .controlSize(.large).buttonStyle(.borderedProminent)
+                .tint(deleteMode == 1 ? Theme.danger : accent)   // 완전삭제는 위험색으로 신호
             }
-            .padding(.horizontal, 22).padding(.top, 20).padding(.bottom, 22)
+            .padding(.horizontal, 22).padding(.top, 18).padding(.bottom, 22)
         }
         .frame(width: 340)
         .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.regularMaterial))
@@ -376,7 +463,243 @@ struct ContentView: View {
 
     private func runClean(_ req: CleanRequest) {
         cleanRequest = nil
-        Task { await engine.clean(targets: req.targets) }
+        if req.isProject { Task { await engine.cleanProjects() } }
+        else { Task { await engine.clean(targets: req.targets) } }
+    }
+
+    // ── 프로젝트 폴더 스캐너 뷰 ──
+
+    private var filteredProjects: [ProjectDir] {
+        projOldOnly ? engine.projectDirs.filter { $0.ageDays >= 30 } : engine.projectDirs
+    }
+    private var selectedProjects: [ProjectDir] { filteredProjects.filter(\.selected) }
+
+    private func projDisplay(_ p: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return p.hasPrefix(home) ? "~" + p.dropFirst(home.count) : p
+    }
+
+    private func pickFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = tr("proj.pickFolder", lang)
+        if panel.runModal() == .OK, let url = panel.url {
+            scanRoot = url.path
+            Task { await engine.scanProjects(root: url.path) }
+        }
+    }
+
+    private var projectScanView: some View {
+        let allOn = !filteredProjects.isEmpty && filteredProjects.allSatisfy(\.selected)
+        return VStack(spacing: 0) {
+            // 툴바: 스캔 위치 · 폴더 선택 · 오래된 것만 · 스캔
+            HStack(spacing: 8) {
+                Image(systemName: "folder").foregroundStyle(Theme.sweep)
+                Text(scanRoot.isEmpty ? "~/" : projDisplay(scanRoot))
+                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Button(tr("proj.pickFolder", lang)) { pickFolder() }.controlSize(.small)
+                Spacer()
+                Toggle(isOn: $projOldOnly) { Text(tr("proj.oldOnly", lang)).font(.caption) }
+                    .toggleStyle(.checkbox)
+                Button { Task { await engine.scanProjects(root: scanRoot.isEmpty ? "~" : scanRoot) } } label: {
+                    HStack(spacing: 5) {
+                        if engine.isScanningProjects { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                        else { Image(systemName: "magnifyingglass") }
+                        Text(tr("proj.scan", lang))
+                    }
+                }
+                .buttonStyle(.borderedProminent).controlSize(.small).disabled(engine.isScanningProjects)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(.regularMaterial).overlay(alignment: .bottom) { Divider() }
+
+            // 본문
+            if engine.isScanningProjects {
+                Spacer()
+                ProgressView(tr("proj.scanning", lang)).controlSize(.large)
+                Spacer()
+            } else if filteredProjects.isEmpty {
+                VStack(spacing: 10) {
+                    Spacer()
+                    Image(systemName: "folder.badge.questionmark").font(.system(size: 30)).foregroundStyle(.secondary)
+                    Text(engine.projectScanRoot.isEmpty ? tr("proj.startHint", lang) : tr("proj.noneFound", lang))
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 3) {
+                        ForEach(filteredProjects) { dir in
+                            HStack(spacing: 10) {
+                                Toggle("", isOn: Binding(get: { dir.selected },
+                                                         set: { engine.setProjectSelected(dir.id, $0) }))
+                                    .labelsHidden()
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(projDisplay(dir.path))
+                                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                                        .lineLimit(1).truncationMode(.middle)
+                                    Text(tr("proj.agoFmt", lang, dir.ageDays))
+                                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                                }
+                                Spacer(minLength: 8)
+                                Text(humanKB(dir.sizeKB))
+                                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 11).padding(.vertical, 7)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+
+            // 하단 액션바 (결과 있을 때)
+            if !filteredProjects.isEmpty {
+                HStack(spacing: 10) {
+                    Button { engine.setAllProjectsSelected(!allOn) } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: allOn ? "checkmark.square.fill" : "square")
+                                .foregroundStyle(allOn ? AnyShapeStyle(Theme.sweep) : AnyShapeStyle(.secondary))
+                            Text(allOn ? tr("select.none", lang) : tr("select.all", lang))
+                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                        }
+                    }.buttonStyle(.plain)
+                    Spacer()
+                    Text("\(selectedProjects.count) / \(filteredProjects.count)")
+                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                    Button {
+                        let kb = selectedProjects.reduce(0) { $0 + $1.sizeKB }
+                        cleanRequest = CleanRequest(targets: nil, title: "", count: selectedProjects.count,
+                                                    sizeKB: kb, hasHeavy: false, isSingle: false, isProject: true)
+                    } label: {
+                        HStack(spacing: 5) { Icons.view("trash", size: 12); Text(tr("footer.clean", lang)) }
+                    }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(selectedProjects.isEmpty || engine.isCleaning)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(.regularMaterial).overlay(alignment: .top) { Divider() }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // ── 정리 진행 창 (실시간) ──
+
+    @ViewBuilder private var cleanProgressOverlay: some View {
+        if engine.showCleanProgress {
+            ZStack {
+                // 정리 중엔 바깥 탭으로 못 닫음(진행 보호). 완료 후 '닫기' 버튼으로만.
+                Rectangle().fill(.black.opacity(0.32)).ignoresSafeArea()
+                cleanProgressCard
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
+    }
+
+    /// 항목 상태 마크 — 대기(시계)/정리중(스피너)/완료(체크)/실패(엑스)
+    @ViewBuilder private func statusMark(_ s: CleanStatus) -> some View {
+        switch s {
+        case .pending:  Image(systemName: "clock").font(.system(size: 12)).foregroundStyle(.tertiary).frame(width: 16)
+        case .cleaning: ProgressView().controlSize(.small).scaleEffect(0.66).frame(width: 16)
+        case .done:     Image(systemName: "checkmark.circle.fill").font(.system(size: 13)).foregroundStyle(Theme.sweep).frame(width: 16)
+        case .failed:   Image(systemName: "xmark.circle.fill").font(.system(size: 13)).foregroundStyle(Theme.danger).frame(width: 16)
+        }
+    }
+
+    private var cleanProgressCard: some View {
+        let items = engine.cleanItems
+        let total = items.count
+        let ok = items.filter { $0.status == .done }.count
+        let failed = items.filter { $0.status == .failed }.count
+        let done = ok + failed
+        let accent = failed > 0 ? Theme.heavy : Theme.sweep
+        return VStack(spacing: 0) {
+            // 헤더: 진행중=스피너 / 완료=체크 / 실패있음=경고
+            ZStack {
+                Circle().fill(accent.opacity(0.15)).frame(width: 56, height: 56)
+                if !engine.cleanDone {
+                    ProgressView().controlSize(.large)
+                } else if failed > 0 {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 23)).foregroundStyle(Theme.heavy)
+                } else {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 26)).foregroundStyle(Theme.sweep)
+                }
+            }
+            .padding(.top, 22)
+            Text(engine.cleanDone ? tr("progress.doneTitle", lang) : tr("footer.cleaning", lang))
+                .font(.system(.title3, design: .rounded).weight(.bold)).padding(.top, 12)
+
+            if engine.cleanDone {
+                Text(humanKB(engine.cleanReclaimedKB))
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(Theme.sweep).contentTransition(.numericText()).padding(.top, 4)
+                Text(failed > 0 ? tr("progress.okFailFmt", lang, ok, failed) : tr("progress.cleanedFmt", lang, ok))
+                    .font(.callout).foregroundStyle(.secondary).padding(.top, 1)
+            } else {
+                ProgressView(value: Double(done), total: Double(max(1, total)))
+                    .tint(Theme.sweep).padding(.horizontal, 24).padding(.top, 14)
+                Text("\(done) / \(total)")
+                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary).padding(.top, 5)
+            }
+
+            // 항목 리스트 (스크롤·고정 높이)
+            ScrollView {
+                VStack(spacing: 3) {
+                    ForEach(items) { item in
+                        HStack(spacing: 9) {
+                            statusMark(item.status)
+                            Text(item.name).font(.system(size: 12, weight: .medium, design: .rounded))
+                                .foregroundStyle(item.status == .pending ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                            Spacer(minLength: 6)
+                            switch item.status {
+                            case .done:
+                                Text(humanKB(item.sizeKB)).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                            case .failed:
+                                Text(tr("progress.rowFailed", lang)).font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(Theme.danger).help(item.reason ?? "")
+                            case .cleaning:
+                                Text(tr("progress.rowCleaning", lang)).font(.system(size: 11)).foregroundStyle(Theme.sweep)
+                            case .pending:
+                                EmptyView()
+                            }
+                        }
+                        .padding(.horizontal, 11).padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 7)
+                            .fill(item.status == .cleaning ? Theme.sweep.opacity(0.10) : .clear))
+                    }
+                }
+                .padding(.horizontal, 14)
+            }
+            .frame(height: min(CGFloat(total) * 33 + 3, 224))
+            .padding(.top, 14)
+
+            if engine.cleanDone {
+                Button { engine.dismissCleanProgress() } label: {
+                    Text(tr("progress.close", lang)).frame(maxWidth: .infinity).fontWeight(.semibold)
+                }
+                .controlSize(.large).buttonStyle(.borderedProminent).tint(Theme.sweep)
+                .keyboardShortcut(.defaultAction)
+                .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 22)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle").font(.system(size: 11)).foregroundStyle(Theme.sweep)
+                    Text(tr("progress.reclaiming", lang)).font(.caption).foregroundStyle(.secondary)
+                    Text(humanKB(engine.cleanReclaimedKB))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Theme.sweep).contentTransition(.numericText())
+                }
+                .padding(.top, 15).padding(.bottom, 22)
+            }
+        }
+        .frame(width: 360)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.regularMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 28, y: 10)
     }
 }
 

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Observation
+import CryptoKit
 
 /// 자동 업데이트 — 릴리스 `.app.zip` 을 받아 현재 앱을 교체하고 재실행한다 (의존성 0).
 ///
@@ -23,7 +24,7 @@ final class Updater {
         AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .systemDefault
     }
 
-    func install(from assetURL: URL) async {
+    func install(from assetURL: URL, sigURL: URL?) async {
         phase = .working
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("DevSweepUpdate-\(UUID().uuidString)")
@@ -37,6 +38,10 @@ final class Updater {
             }
             let zip = work.appendingPathComponent("update.zip")
             try fm.moveItem(at: tmp, to: zip)
+
+            // 1b) Ed25519 서명 검증 — 압축 해제/실행 전에 차단하는 실질 신뢰경계.
+            //     서명이 없거나 공개키와 불일치하면 여기서 설치를 거부한다.
+            try await verifySignature(zip: zip, sigURL: sigURL)
 
             // 2) ditto 로 압축 해제 → DevSweep.app 추출 (번들 메타/서명 보존)
             try runTool("/usr/bin/ditto", ["-x", "-k", zip.path, work.path])
@@ -102,6 +107,26 @@ final class Updater {
         try p.run(); p.waitUntilExit()
         guard p.terminationStatus == 0 else {
             throw UpdaterError.message(tr("err.toolFmt", uiLang, (launch as NSString).lastPathComponent, Int(p.terminationStatus)))
+        }
+    }
+
+    /// 릴리스 zip 의 Ed25519 서명을 앱에 박힌 공개키로 검증한다.
+    /// 개인키는 repo 밖에만 있으므로, 릴리스 asset 이 바꿔치기돼도 유효 서명을 만들 수 없다.
+    /// (ad-hoc codesign 은 누구나 재서명 가능 → 이 검증이 진짜 신뢰 앵커)
+    private func verifySignature(zip: URL, sigURL: URL?) async throws {
+        guard let sigURL else { throw UpdaterError.message(tr("err.sigMissing", uiLang)) }
+        let (sigData, resp) = try await URLSession.shared.data(from: sigURL)
+        if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
+            throw UpdaterError.message(tr("err.sigMissing", uiLang))
+        }
+        guard let sigText = String(data: sigData, encoding: .utf8),
+              let sig = Data(base64Encoded: sigText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let pubData = Data(base64Encoded: AppInfo.updatePublicKeyB64),
+              let pub = try? Curve25519.Signing.PublicKey(rawRepresentation: pubData),
+              let zipData = try? Data(contentsOf: zip)
+        else { throw UpdaterError.message(tr("err.sigInvalid", uiLang)) }
+        guard pub.isValidSignature(sig, for: zipData) else {
+            throw UpdaterError.message(tr("err.sigInvalid", uiLang))
         }
     }
 

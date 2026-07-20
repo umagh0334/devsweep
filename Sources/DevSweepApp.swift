@@ -38,6 +38,7 @@ struct DevSweepApp: App {
                 .onChange(of: appearance) { _, _ in applyAppearance() }
                 .task {
                     // 콜드 런치 시 1회(.onChange 는 초기값엔 미발동) — 외관 적용 + 자동 정리 합산 + self-heal
+                    AppRefs.engine = engine; AppRefs.appState = appState   // 메뉴바(AppKit) 브리지
                     applyAppearance()
                     AutoClean.reconcile()
                     AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, hour: autoCleanHour, minute: autoCleanMinute, weekday: autoCleanWeekday, day: autoCleanDay, olderThanDays: olderThanDays)
@@ -82,6 +83,8 @@ private struct OpenSettingsButton: View {
 @Observable final class AppState {
     /// 메뉴 "업데이트 확인…" 이 켜면, 설정창이 정보 탭으로 전환하고 자동 체크한다.
     var requestUpdateCheck = false
+    /// 메뉴바 "안전셋 정리…" 가 켜면, 메인 뷰가 추천셋 선택 후 확인창을 띄운다.
+    var requestCleanRecommended = false
 }
 
 /// 앱 메뉴(About 아래) "업데이트 확인…" — 설정창 정보 탭을 열고 자동 체크를 건다.

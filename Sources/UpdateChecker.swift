@@ -11,7 +11,8 @@ final class UpdateChecker {
         case checking
         case upToDate
         case noRelease   // releases/latest 404 — 아직 공개 릴리스 없음(또는 비공개 repo)
-        case updateAvailable(tag: String, url: URL, asset: URL?)   // asset = .app.zip 직접 다운로드 URL
+        // asset = .app.zip 다운로드 URL, sig = .app.zip.sig(Ed25519 서명) URL — 둘 다 있어야 설치 가능
+        case updateAvailable(tag: String, url: URL, asset: URL?, sig: URL?)
         case failed
     }
     var status: Status = .idle
@@ -33,8 +34,11 @@ final class UpdateChecker {
             // .app.zip asset 의 직접 다운로드 URL (자동 설치용). 없으면 nil → 릴리스 페이지 링크만.
             let asset = rel.assets.first { $0.name.hasSuffix(".app.zip") }
                 .flatMap { URL(string: $0.browserDownloadURL) }
+            // 대응 Ed25519 서명 asset — Updater 가 이걸로 zip 을 검증(없으면 설치 거부).
+            let sig = rel.assets.first { $0.name.hasSuffix(".app.zip.sig") }
+                .flatMap { URL(string: $0.browserDownloadURL) }
             status = Self.isNewer(latest, than: AppInfo.version)
-                ? .updateAvailable(tag: rel.tagName, url: url, asset: asset)
+                ? .updateAvailable(tag: rel.tagName, url: url, asset: asset, sig: sig)
                 : .upToDate
         } catch {
             status = .failed

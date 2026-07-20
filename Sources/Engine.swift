@@ -12,6 +12,17 @@ final class Engine {
     var lastLog = ""
     var errorMessage: String?
 
+    // ── 정리 진행 창 상태 (순차 정리 루프가 실시간 갱신) ──
+    var showCleanProgress = false      // 진행 오버레이 표시 여부
+    var cleanItems: [CleanItem] = []   // 정리 대상별 실시간 상태
+    var cleanReclaimedKB = 0           // 누적 회수량(성공 항목만)
+    var cleanDone = false              // 루프 종료 → 요약+닫기 표시
+
+    // ── 프로젝트 폴더 스캐너 상태 (node_modules·target 등) ──
+    var isScanningProjects = false
+    var projectDirs: [ProjectDir] = []
+    var projectScanRoot = ""
+
     /// 펼친 카테고리의 상세 정보 캐시 (lazy 로드). 정리/재스캔 후 무효화됨.
     var detailCache: [String: CategoryDetail] = [:]
     var loadingDetails: Set<String> = []
@@ -60,6 +71,8 @@ final class Engine {
             }
             detailCache.removeAll()   // 용량이 갱신됐으니 stale 상세 무효화
             detailRevision &+= 1      // 같은 항목 선택 상태에서도 상세 패널 재로드 트리거
+            // 메뉴바 표시용 회수 가능 용량(보호 제외) 저장
+            UserDefaults.standard.set(categories.filter { !$0.protected }.reduce(0) { $0 + $1.sizeKB }, forKey: "reclaimableKB")
         } catch {
             errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
         }
@@ -79,7 +92,9 @@ final class Engine {
         }
     }
 
-    /// targets=nil이면 선택된 것 전체, 값 있으면 그 카테고리만 정리하고 재스캔한다.
+    /// targets=nil이면 선택된 것 전체, 값 있으면 그 카테고리만 정리한다.
+    /// 카테고리를 **하나씩 순차** 정리하며 진행 창(cleanItems)을 실시간 갱신 — 항목별 exit code(P1)로
+    /// 완료/실패를 정확히 판정하고, 회수량은 성공한 항목만 누적한다(거짓 회수량 방지).
     func clean(targets: [String]? = nil) async {
         let names = targets ?? categories.filter(\.selected).map(\.name)
         guard !names.isEmpty, !isCleaning else { return }
@@ -88,23 +103,156 @@ final class Engine {
         guard let path = enginePath else {
             errorMessage = tr("err.engineMissing", uiLang); isCleaning = false; return
         }
-        // 정리 직전 측정값 = 회수 예상치 (정보성 누적용)
-        let freedKB = categories.filter { names.contains($0.name) }.reduce(0) { $0 + $1.sizeKB }
-        var cleanError: String?
-        do {
-            lastLog = try await run([path, "clean", "--yes"] + names + ageArgs)
-            let prev = UserDefaults.standard.integer(forKey: "totalReclaimedKB")
-            UserDefaults.standard.set(prev + freedKB, forKey: "totalReclaimedKB")
-            // 성공(throw 안 된 경로)에서만 알림 — 설정 토글 기본 ON
-            if UserDefaults.standard.object(forKey: "notifyOnClean") as? Bool ?? true {
-                Notifier.cleanDone(reclaimedKB: freedKB)
+
+        // 진행 모델 초기화 — 큰 것부터(회수량이 빠르게 오름). 크기는 정리 전 측정치.
+        let sizeByName = Dictionary(categories.map { ($0.name, $0.sizeKB) }, uniquingKeysWith: { a, _ in a })
+        cleanItems = names.map { CleanItem(name: $0, sizeKB: sizeByName[$0] ?? 0) }
+                          .sorted { $0.sizeKB > $1.sizeKB }
+        cleanReclaimedKB = 0
+        cleanDone = false
+        showCleanProgress = true
+
+        // 삭제 방식 — 0=휴지통(기본·복구가능) 1=완전삭제. 확인창 세그먼트가 AppStorage 로 저장.
+        let useTrash = UserDefaults.standard.integer(forKey: "deleteMode") == 0
+
+        for i in cleanItems.indices {
+            cleanItems[i].status = .cleaning
+            do {
+                try await cleanOne(cleanItems[i].name, path: path, useTrash: useTrash)
+                cleanItems[i].status = .done
+                cleanReclaimedKB += cleanItems[i].sizeKB
+            } catch {
+                cleanItems[i].status = .failed
+                cleanItems[i].reason = error.localizedDescription
             }
-        } catch {
-            cleanError = tr("err.cleanFmt", uiLang, error.localizedDescription)
         }
+
+        // 성공분만 누적 + 알림 (실패 항목은 회수량에서 제외)
+        if cleanReclaimedKB > 0 {
+            let prev = UserDefaults.standard.integer(forKey: "totalReclaimedKB")
+            UserDefaults.standard.set(prev + cleanReclaimedKB, forKey: "totalReclaimedKB")
+            if UserDefaults.standard.object(forKey: "notifyOnClean") as? Bool ?? true {
+                Notifier.cleanDone(reclaimedKB: cleanReclaimedKB)
+            }
+        }
+        cleanDone = true
         isCleaning = false
-        await scan()   // scan()이 detailCache.removeAll() 수행 (성공 시 errorMessage=nil 로 덮음)
-        if let cleanError { errorMessage = cleanError }   // 재스캔이 지워도 정리 실패는 남긴다
+        await scan()   // 배경 리스트 갱신(용량 0으로). 모달은 별도 cleanItems 라 안 흔들림.
+    }
+
+    /// 카테고리 1개 정리 — 휴지통(경로를 trashItem, 복구가능) 또는 완전삭제(CLI clean). 실패 시 throw.
+    private func cleanOne(_ name: String, path: String, useTrash: Bool) async throws {
+        if useTrash {
+            // 삭제 대상 경로를 받아 휴지통으로. 경로 없는 명령기반(docker·rustup)은 네이티브 clean 폴백.
+            let out = try await run([path, "paths", name])
+            let paths = out.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+            if paths.isEmpty {
+                _ = try await run([path, "clean", "--yes", name] + ageArgs)
+            } else {
+                try trashPaths(paths)
+            }
+        } else {
+            _ = try await run([path, "clean", "--yes", name] + ageArgs)
+        }
+    }
+
+    /// 경로들을 macOS 휴지통으로 이동 (복구가능·되돌리기 지원). 없는 경로는 스킵, 실패 시 throw.
+    private func trashPaths(_ paths: [String]) throws {
+        let fm = FileManager.default
+        for p in paths {
+            let url = URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
+            guard fm.fileExists(atPath: url.path) else { continue }
+            try fm.trashItem(at: url, resultingItemURL: nil)
+        }
+    }
+
+    /// 진행 창 닫기 — 완료 요약 확인 후 사용자가 직접 닫을 때.
+    func dismissCleanProgress() {
+        showCleanProgress = false
+        cleanItems = []
+        cleanReclaimedKB = 0
+        cleanDone = false
+    }
+
+    // ── 프로젝트 폴더 스캐너 ──
+
+    /// root 아래에서 무거운 빌드/의존 폴더(node_modules 등)를 찾아 목록 갱신 (크기 내림차순).
+    func scanProjects(root: String) async {
+        guard !isScanningProjects else { return }
+        isScanningProjects = true; errorMessage = nil
+        defer { isScanningProjects = false }
+        guard let path = enginePath else { errorMessage = tr("err.engineMissing", uiLang); return }
+        do {
+            let out = try await run([path, "scan-projects", root])
+            var dirs = try JSONDecoder().decode([ProjectDir].self, from: Data(out.utf8))
+            dirs.sort { $0.sizeKB > $1.sizeKB }
+            projectDirs = dirs
+            projectScanRoot = root
+        } catch {
+            errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
+        }
+    }
+
+    func setProjectSelected(_ id: String, _ value: Bool) {
+        if let i = projectDirs.firstIndex(where: { $0.id == id }) { projectDirs[i].selected = value }
+    }
+    func setAllProjectsSelected(_ value: Bool) {
+        for i in projectDirs.indices { projectDirs[i].selected = value }
+    }
+
+    /// 선택된 프로젝트 폴더를 순차 정리하며 진행 창을 실시간 갱신 (캐시 정리와 동일 UI 재사용).
+    /// 삭제 방식(휴지통/완전)은 캐시 정리와 공유(deleteMode).
+    func cleanProjects() async {
+        let sel = projectDirs.filter(\.selected)
+        guard !sel.isEmpty, !isCleaning else { return }
+        isCleaning = true; errorMessage = nil
+        let useTrash = UserDefaults.standard.integer(forKey: "deleteMode") == 0
+
+        cleanItems = sel.map { CleanItem(name: prettyPath($0.path), sizeKB: $0.sizeKB, id: $0.path) }
+                        .sorted { $0.sizeKB > $1.sizeKB }
+        cleanReclaimedKB = 0; cleanDone = false; showCleanProgress = true
+
+        for i in cleanItems.indices {
+            cleanItems[i].status = .cleaning
+            do {
+                try await cleanPath(cleanItems[i].id, useTrash: useTrash)
+                cleanItems[i].status = .done
+                cleanReclaimedKB += cleanItems[i].sizeKB
+            } catch {
+                cleanItems[i].status = .failed
+                cleanItems[i].reason = error.localizedDescription
+            }
+        }
+        if cleanReclaimedKB > 0 {
+            let prev = UserDefaults.standard.integer(forKey: "totalReclaimedKB")
+            UserDefaults.standard.set(prev + cleanReclaimedKB, forKey: "totalReclaimedKB")
+            if UserDefaults.standard.object(forKey: "notifyOnClean") as? Bool ?? true {
+                Notifier.cleanDone(reclaimedKB: cleanReclaimedKB)
+            }
+        }
+        cleanDone = true; isCleaning = false
+        // 정리 성공한 폴더는 목록에서 제거
+        let doneIds = Set(cleanItems.filter { $0.status == .done }.map(\.id))
+        projectDirs.removeAll { doneIds.contains($0.path) }
+    }
+
+    /// 경로 1개를 휴지통(복구가능) 또는 완전삭제(rm). 큰 폴더가 UI 를 막지 않게 백그라운드에서 수행.
+    private func cleanPath(_ path: String, useTrash: Bool) async throws {
+        try await Task.detached(priority: .userInitiated) {
+            let url = URL(fileURLWithPath: path)
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: url.path) else { return }
+            if useTrash { try fm.trashItem(at: url, resultingItemURL: nil) }
+            else { try fm.removeItem(at: url) }
+        }.value
+    }
+
+    /// 표시용 경로 축약 — 홈은 ~ 로, 너무 길면 앞을 …로.
+    private func prettyPath(_ p: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var s = p.hasPrefix(home) ? "~" + p.dropFirst(home.count) : p
+        if s.count > 42 { s = "…" + s.suffix(41) }
+        return String(s)
     }
 
     /// 카테고리 선택(정리 대상) 토글 — 마스터 행 체크박스용 (정렬과 무관하게 이름으로 갱신).
@@ -220,4 +368,28 @@ enum EngineError: LocalizedError {
             return stderr.isEmpty ? "엔진 실패 (코드 \(code))" : "엔진 실패 (코드 \(code)): \(stderr)"
         }
     }
+}
+
+/// 정리 진행 창의 항목 1개 — 순차 정리 루프가 status 를 pending→cleaning→done/failed 로 실시간 갱신한다.
+/// id 는 고유키(카테고리명 or 프로젝트 전체경로), name 은 표시명(카테고리명 or 축약 경로).
+struct CleanItem: Identifiable, Equatable {
+    let name: String
+    let sizeKB: Int
+    var status: CleanStatus = .pending
+    var reason: String? = nil        // 실패 시 상세(행 툴팁)
+    let id: String
+    init(name: String, sizeKB: Int, id: String? = nil) {
+        self.name = name; self.sizeKB = sizeKB; self.id = id ?? name
+    }
+}
+enum CleanStatus: Equatable { case pending, cleaning, done, failed }
+
+/// 프로젝트 스캐너가 찾은 무거운 폴더 1개 (node_modules·target 등).
+struct ProjectDir: Identifiable, Decodable, Equatable {
+    let path: String
+    let sizeKB: Int
+    let ageDays: Int
+    var selected: Bool = true          // JSON 에 없음 → 기본 선택
+    var id: String { path }
+    enum CodingKeys: String, CodingKey { case path; case sizeKB = "size_kb"; case ageDays = "age_days" }
 }

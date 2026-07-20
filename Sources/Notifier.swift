@@ -43,13 +43,116 @@ enum Notifier {
     }
 }
 
-/// 알림 권한 1회 요청 + 포그라운드에서도 배너가 뜨도록 delegate 설정.
+/// 메뉴바(AppKit)에서 SwiftUI 상태 접근용 브리지. DevSweepApp 이 launch 시 주입(weak → 수명 안 늘림).
+enum AppRefs {
+    static weak var engine: Engine?
+    static weak var appState: AppState?
+}
+
+/// 알림 권한 1회 요청 + 포그라운드 배너 + 메뉴바(NSStatusItem) 관리.
 /// (NSApplicationDelegateAdaptor 로 DevSweepApp 에 연결)
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
+    private var statusItem: NSStatusItem?
+    private weak var mainWindow: NSWindow?
+
+    private var menuBarOn: Bool { UserDefaults.standard.object(forKey: "menuBarEnabled") as? Bool ?? true }
+    private var showSize: Bool { UserDefaults.standard.bool(forKey: "menuBarShowSize") }
+    private var dockHidden: Bool { UserDefaults.standard.bool(forKey: "dockHidden") }
+    private var uiLang: AppLanguage { AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .systemDefault }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+
+        applyActivationPolicy()
+        rebuildStatusItem()
+
+        // 메인 창이 처음 뜰 때 isReleasedWhenClosed=false → 닫아도 메모리 유지(메뉴바에서 재표시 가능)
+        NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
+            guard let w = note.object as? NSWindow, w.styleMask.contains(.titled), w.frame.width > 600 else { return }
+            w.isReleasedWhenClosed = false
+            self?.mainWindow = w
+        }
+        // 설정 토글(메뉴바 on/off·용량표시·독숨김) + 회수량 변화에 반응
+        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.applyActivationPolicy()
+            self?.rebuildStatusItem()
+        }
+    }
+
+    // 메뉴바 켜져 있으면 창 닫아도 앱 유지(메뉴바로 재접근). 꺼져 있으면 표준 동작.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !menuBarOn }
+    // 독 아이콘 클릭 등 재활성화 시 창 복원 허용.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showMainWindow() }
+        return true
+    }
+
+    private func applyActivationPolicy() {
+        NSApp.setActivationPolicy(dockHidden ? .accessory : .regular)
+    }
+
+    private func rebuildStatusItem() {
+        guard menuBarOn else { statusItem = nil; return }
+        if statusItem == nil {
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            if let img = NSImage(systemSymbolName: "wind", accessibilityDescription: "DevSweep") {
+                img.isTemplate = true
+                item.button?.image = img
+            } else {
+                item.button?.title = "DevSweep"
+            }
+            let menu = NSMenu(); menu.delegate = self
+            item.menu = menu
+            statusItem = item
+        }
+        updateStatusTitle()
+    }
+
+    private func updateStatusTitle() {
+        guard let btn = statusItem?.button else { return }
+        if showSize {
+            let kb = UserDefaults.standard.integer(forKey: "reclaimableKB")
+            btn.title = kb > 0 ? " " + humanKB(kb) : ""
+            btn.imagePosition = .imageLeading
+        } else {
+            btn.title = ""
+        }
+    }
+
+    // 메뉴는 열릴 때마다 최신 회수량으로 재구성.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        updateStatusTitle()
+        menu.removeAllItems()
+        let kb = UserDefaults.standard.integer(forKey: "reclaimableKB")
+        let info = NSMenuItem(title: "\(tr("menubar.reclaimable", uiLang)): \(humanKB(kb))", action: nil, keyEquivalent: "")
+        info.isEnabled = false
+        menu.addItem(info)
+        menu.addItem(.separator())
+        addItem(menu, tr("menubar.cleanSafe", uiLang), #selector(menuClean))
+        addItem(menu, tr("menubar.rescan", uiLang), #selector(menuScan))
+        menu.addItem(.separator())
+        addItem(menu, tr("menubar.open", uiLang), #selector(menuOpen), key: "o")
+        addItem(menu, tr("menubar.quit", uiLang), #selector(menuQuit), key: "q")
+    }
+
+    private func addItem(_ menu: NSMenu, _ title: String, _ sel: Selector, key: String = "") {
+        let it = NSMenuItem(title: title, action: sel, keyEquivalent: key)
+        it.target = self
+        menu.addItem(it)
+    }
+
+    @objc private func menuScan() { Task { @MainActor in await AppRefs.engine?.scan() } }
+    @objc private func menuClean() { showMainWindow(); AppRefs.appState?.requestCleanRecommended = true }
+    @objc private func menuOpen() { showMainWindow() }
+    @objc private func menuQuit() { NSApp.terminate(nil) }
+
+    private func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        let win = mainWindow ?? NSApp.windows.first { $0.styleMask.contains(.titled) && $0.frame.width > 600 }
+        win?.isReleasedWhenClosed = false
+        win?.makeKeyAndOrderFront(nil)
     }
 
     /// 앱이 떠 있을 때도 배너+소리로 표시(기본은 포그라운드면 억제됨).

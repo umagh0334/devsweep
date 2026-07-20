@@ -656,6 +656,42 @@ cmd_total() {
   echo "$total"
 }
 
+# 카테고리의 삭제 대상 경로를 한 줄에 하나씩 출력 (GUI 휴지통 모드용).
+# 명령 기반(docker·rustup-targets 등 paths 액션 없는)은 빈 출력 → GUI 가 네이티브 clean 으로 폴백.
+cmd_paths() {
+  local c
+  for c in "$@"; do
+    is_in "$c" "${SAFE_CATS[@]}" "${HEAVY_CATS[@]}" || continue
+    "do_$c" paths 2>/dev/null
+  done
+}
+
+# 프로젝트 폴더 스캐너 — root 아래에서 무거운 빌드/의존 폴더(node_modules 등)를 찾아 JSON 출력.
+#   각: {"path","size_kb","age_days"}. 찾은 폴더 내부는 -prune 로 재귀 안 함(중첩 중복/과탐색 방지).
+#   Library·.Trash·.git 는 스킵. 0KB 는 제외. usage: scan-projects [root]
+cmd_scan_projects() {
+  local root="${1:-$HOME}"
+  root="${root/#\~/$HOME}"
+  [ -d "$root" ] || { printf '[]\n'; return 0; }
+  local now first=1 d kb mt days
+  now=$(date +%s)
+  printf '['
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    kb=$(du -sk "$d" 2>/dev/null | awk '{print $1}'); kb=${kb:-0}
+    [ "$kb" -eq 0 ] && continue
+    mt=$(stat -f %m "$d" 2>/dev/null || echo "$now")
+    days=$(( (now - mt) / 86400 )); [ "$days" -lt 0 ] && days=0
+    [ "$first" -eq 1 ] && first=0 || printf ','
+    printf '{"path":"%s","size_kb":%s,"age_days":%s}' "$(json_escape "$d")" "$kb" "$days"
+  done < <(find "$root" \
+      \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \) -prune -o \
+      -type d \( -name node_modules -o -name target -o -name .next -o -name .nuxt \
+                 -o -name dist -o -name build -o -name Pods -o -name .venv -o -name venv \
+                 -o -name __pycache__ -o -name .turbo -o -name .parcel-cache \) -prune -print 2>/dev/null)
+  printf ']\n'
+}
+
 # ── 엔트리포인트 ─────────────────────────────────────────────
 # 전역 옵션: --older-than=Nd|Nw|N (모든 명령 공통 — scan/json/detail/clean 의 측정·정리에 적용)
 AGE_DAYS=""
@@ -682,6 +718,8 @@ case "${1:-scan}" in
   detail)      shift; cmd_detail "${1:-}" ;;
   clean|c)     shift; cmd_clean "$@" ;;
   total)       cmd_total ;;
+  paths)       shift; cmd_paths "$@" ;;
+  scan-projects) shift; cmd_scan_projects "${1:-}" ;;
   -h|--help|help) awk 'NR>=2 && /^set /{exit} NR>=2{sub(/^# ?/,""); print}' "$0" ;;
   *) echo "알 수 없는 명령: $1  ('devsweep --help' 참고)" >&2; exit 1 ;;
 esac

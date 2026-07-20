@@ -1,6 +1,11 @@
 # 빌드 산출물 (build.sh 로 재생성)
 DevSweep.app/
 DevSweep-*.app.zip
+DevSweep-*.app.zip.sig
+
+# 업데이트 서명 개인키 — 절대 커밋 금지 (정상 위치는 ~/.config/devsweep/update_ed25519.key)
+*.key
+update_ed25519*
 
 # macOS
 .DS_Store

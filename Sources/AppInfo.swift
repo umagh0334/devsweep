@@ -13,6 +13,12 @@ enum AppInfo {
     static let repoOwner = "umagh0334"    // 개인 GitHub 계정
     static let repoName  = "devsweep"
 
+    /// 자동 업데이트 신뢰 앵커 — 릴리스 zip 서명 검증용 Ed25519 공개키(base64, 32바이트 raw).
+    /// 대응 개인키는 repo 밖(`~/.config/devsweep/update_ed25519.key`)에만 존재하며 `build.sh --release`
+    /// 가 zip 을 서명해 `.app.zip.sig` asset 을 만든다. ad-hoc 서명은 누구나 재서명 가능하므로,
+    /// **이 키 검증이 실제 신뢰경계**다 — 서명이 없거나 불일치면 설치를 거부한다.
+    static let updatePublicKeyB64 = "IPa2UPf+xOmL5sjEzIqLpV/3IXf+BKL1WhxHp8iVnyE="
+
     static var repoURL: URL { URL(string: "https://github.com/\(repoOwner)/\(repoName)")! }
     static var releasesURL: URL { URL(string: "https://github.com/\(repoOwner)/\(repoName)/releases")! }
     static var latestReleaseAPI: URL { URL(string: "https://api.github.com/repos/\(repoOwner)/\(repoName)/releases/latest")! }

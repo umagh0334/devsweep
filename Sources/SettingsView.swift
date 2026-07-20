@@ -100,6 +100,9 @@ struct GeneralSettings: View {
     @AppStorage("autoScan") private var autoScan = true
     @AppStorage("selectHeavy") private var selectHeavy = false
     @AppStorage("notifyOnClean") private var notifyOnClean = true
+    @AppStorage("menuBarEnabled") private var menuBarEnabled = true
+    @AppStorage("menuBarShowSize") private var menuBarShowSize = false
+    @AppStorage("dockHidden") private var dockHidden = false
 
     var body: some View {
         Form {
@@ -135,6 +138,19 @@ struct GeneralSettings: View {
                     Text(tr("general.notify", lang))
                     Text(tr("general.notifyDesc", lang))
                 }
+            }
+            Section(tr("general.menuBarSection", lang)) {
+                Toggle(isOn: $menuBarEnabled) {
+                    Text(tr("general.menuBar", lang))
+                    Text(tr("general.menuBarDesc", lang))
+                }
+                Toggle(isOn: $menuBarShowSize) { Text(tr("general.menuBarSize", lang)) }
+                    .disabled(!menuBarEnabled)
+                Toggle(isOn: $dockHidden) {
+                    Text(tr("general.dockHide", lang))
+                    Text(tr("general.dockHideDesc", lang))
+                }
+                .disabled(!menuBarEnabled)
             }
         }
         .formStyle(.grouped)
@@ -697,8 +713,8 @@ struct AboutSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button(tr("about.checkUpdate", lang)) { Task { await updater.check() } }.controlSize(.small)
             }
-        case .updateAvailable(let tag, let url, let asset):
-            updateAvailableView(tag: tag, page: url, asset: asset)
+        case .updateAvailable(let tag, let url, let asset, let sig):
+            updateAvailableView(tag: tag, page: url, asset: asset, sig: sig)
         case .failed:
             HStack(spacing: 6) {
                 Text(tr("about.updateFailed", lang)).font(.caption).foregroundStyle(Theme.danger)
@@ -709,12 +725,12 @@ struct AboutSettings: View {
 
     /// 업데이트 있음 — installer.phase 진행에 따라 [설치] 버튼 / 다운로드·설치 중 / 실패 재시도 표시.
     @ViewBuilder
-    private func updateAvailableView(tag: String, page: URL, asset: URL?) -> some View {
+    private func updateAvailableView(tag: String, page: URL, asset: URL?, sig: URL?) -> some View {
         switch installer.phase {
         case .idle:
             HStack(spacing: 6) {
                 if let asset {
-                    Button { Task { await installer.install(from: asset) } } label: {
+                    Button { Task { await installer.install(from: asset, sigURL: sig) } } label: {
                         Label(tr("about.installFmt", lang, tag), systemImage: "arrow.down.circle.fill")
                     }
                     .controlSize(.small).buttonStyle(.borderedProminent).tint(Theme.sweep)
@@ -736,7 +752,7 @@ struct AboutSettings: View {
             HStack(spacing: 6) {
                 Text(tr("about.updateFailed", lang)).font(.caption).foregroundStyle(Theme.danger).help(msg)
                 if let asset {
-                    Button(tr("about.retry", lang)) { Task { await installer.install(from: asset) } }.controlSize(.small)
+                    Button(tr("about.retry", lang)) { Task { await installer.install(from: asset, sigURL: sig) } }.controlSize(.small)
                 }
             }
         }

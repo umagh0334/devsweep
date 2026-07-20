@@ -65,6 +65,23 @@ case " $* " in
     rm -f "$ROOT"/DevSweep-*.app.zip
     ditto -c -k --keepParent --norsrc --noextattr --noqtn "$APP" "$ZIP"
     echo "✓ zip: $ZIP ($(du -h "$ZIP" | awk '{print $1}' | tr -d ' '))"
+
+    # 6) Ed25519 서명 — 0.1.4+ 앱은 서명 없는/불일치 업데이트를 거부하므로 릴리스에 .sig 는 필수.
+    #    개인키는 repo 밖(~/.config/devsweep)에만 존재. 서명 후 **앱에 박힌 공개키로 자체 검증**해
+    #    키 불일치를 릴리스 전에 잡는다.
+    KEY="$HOME/.config/devsweep/update_ed25519.key"
+    rm -f "$ROOT"/DevSweep-*.app.zip.sig
+    if [ ! -f "$KEY" ]; then
+      echo "✗ 업데이트 서명 개인키 없음: $KEY" >&2
+      echo "  (생성: swift tools/ed25519.swift keygen → PRIVATE 을 이 경로에 저장, chmod 600)" >&2
+      exit 1
+    fi
+    echo "  · Ed25519 서명"
+    swift "$ROOT/tools/ed25519.swift" sign "$KEY" "$ZIP" > "$ZIP.sig" || { echo "✗ 서명 실패" >&2; exit 1; }
+    PUB=$(grep -oE 'updatePublicKeyB64 = "[^"]+"' "$ROOT/Sources/AppInfo.swift" | sed 's/.*"\(.*\)"/\1/')
+    swift "$ROOT/tools/ed25519.swift" verify "$PUB" "$ZIP.sig" "$ZIP" >/dev/null 2>&1 \
+      || { echo "✗ 서명이 앱 공개키(AppInfo.updatePublicKeyB64)와 불일치 — 릴리스 중단" >&2; exit 1; }
+    echo "✓ sig: $ZIP.sig (앱 공개키로 검증됨)"
     ;;
 esac
 
