@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Observation
 
 /// devsweep CLI 엔진을 subprocess로 구동하는 어댑터.
@@ -17,6 +18,9 @@ final class Engine {
     var cleanItems: [CleanItem] = []   // 정리 대상별 실시간 상태
     var cleanReclaimedKB = 0           // 누적 회수량(성공 항목만)
     var cleanDone = false              // 루프 종료 → 요약+닫기 표시
+    /// 이번 정리에서 휴지통으로 옮긴 항목들. 휴지통은 비우기 전까지 공간이 안 늘어나므로
+    /// 완료 화면에서 '열기 / 방금 옮긴 것만 영구삭제'를 제공하는 데 쓴다.
+    var trashedURLs: [URL] = []
 
     // ── 프로젝트 폴더 스캐너 상태 (node_modules·target 등) ──
     var isScanningProjects = false
@@ -110,6 +114,7 @@ final class Engine {
                           .sorted { $0.sizeKB > $1.sizeKB }
         cleanReclaimedKB = 0
         cleanDone = false
+        trashedURLs = []
         showCleanProgress = true
 
         // 삭제 방식 — 0=휴지통(기본·복구가능) 1=완전삭제. 확인창 세그먼트가 AppStorage 로 저장.
@@ -162,8 +167,23 @@ final class Engine {
         for p in paths {
             let url = URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
             guard fm.fileExists(atPath: url.path) else { continue }
-            try fm.trashItem(at: url, resultingItemURL: nil)
+            var moved: NSURL?
+            try fm.trashItem(at: url, resultingItemURL: &moved)
+            if let m = moved as URL? { trashedURLs.append(m) }   // 나중에 '영구삭제' 대상
         }
+    }
+
+    /// 방금 정리에서 휴지통으로 옮긴 항목만 영구 삭제한다.
+    /// 휴지통 '전체 비우기'는 사용자의 다른 파일까지 지우므로 절대 하지 않는다.
+    func emptyTrashedItems() {
+        let fm = FileManager.default
+        for u in trashedURLs { try? fm.removeItem(at: u) }
+        trashedURLs = []
+    }
+
+    /// 휴지통 폴더를 Finder 로 연다.
+    func openTrash() {
+        NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash"))
     }
 
     /// 진행 창 닫기 — 완료 요약 확인 후 사용자가 직접 닫을 때.
@@ -172,6 +192,7 @@ final class Engine {
         cleanItems = []
         cleanReclaimedKB = 0
         cleanDone = false
+        trashedURLs = []
     }
 
     // ── 프로젝트 폴더 스캐너 ──
@@ -210,12 +231,14 @@ final class Engine {
 
         cleanItems = sel.map { CleanItem(name: prettyPath($0.path), sizeKB: $0.sizeKB, id: $0.path) }
                         .sorted { $0.sizeKB > $1.sizeKB }
-        cleanReclaimedKB = 0; cleanDone = false; showCleanProgress = true
+        cleanReclaimedKB = 0; cleanDone = false; trashedURLs = []; showCleanProgress = true
 
         for i in cleanItems.indices {
             cleanItems[i].status = .cleaning
             do {
-                try await cleanPath(cleanItems[i].id, useTrash: useTrash)
+                if let moved = try await cleanPath(cleanItems[i].id, useTrash: useTrash) {
+                    trashedURLs.append(moved)
+                }
                 cleanItems[i].status = .done
                 cleanReclaimedKB += cleanItems[i].sizeKB
             } catch {
@@ -237,13 +260,19 @@ final class Engine {
     }
 
     /// 경로 1개를 휴지통(복구가능) 또는 완전삭제(rm). 큰 폴더가 UI 를 막지 않게 백그라운드에서 수행.
-    private func cleanPath(_ path: String, useTrash: Bool) async throws {
-        try await Task.detached(priority: .userInitiated) {
+    @discardableResult
+    private func cleanPath(_ path: String, useTrash: Bool) async throws -> URL? {
+        try await Task.detached(priority: .userInitiated) { () -> URL? in
             let url = URL(fileURLWithPath: path)
             let fm = FileManager.default
-            guard fm.fileExists(atPath: url.path) else { return }
-            if useTrash { try fm.trashItem(at: url, resultingItemURL: nil) }
-            else { try fm.removeItem(at: url) }
+            guard fm.fileExists(atPath: url.path) else { return nil }
+            if useTrash {
+                var moved: NSURL?
+                try fm.trashItem(at: url, resultingItemURL: &moved)
+                return moved as URL?
+            }
+            try fm.removeItem(at: url)
+            return nil
         }.value
     }
 

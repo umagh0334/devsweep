@@ -29,6 +29,27 @@ enum Notifier {
         }
     }
 
+    /// 새 버전 발견 알림 (자동 체크에서 호출).
+    static func updateAvailable(tag: String) {
+        let lang = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .systemDefault
+        post(title: tr("notify.updateTitle", lang), body: tr("notify.updateBodyFmt", lang, tag))
+    }
+
+    /// 알림 1건 발송 — UN 권한 있으면 UN, 아니면 osascript 폴백(공통 경로).
+    private static func post(title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional, .ephemeral:
+                let content = UNMutableNotificationContent()
+                content.title = title; content.body = body; content.sound = .default
+                center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            default:
+                osascriptNotify(title: title, body: body)
+            }
+        }
+    }
+
     /// osascript `display notification` 폴백. -e 인자는 Process 가 직접 전달(셸 미경유)이라
     /// AppleScript 문자열 이스케이프(역슬래시 먼저 → 따옴표)만 처리하면 된다.
     private static func osascriptNotify(title: String, body: String) {
@@ -67,6 +88,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         applyActivationPolicy()
         rebuildStatusItem()
+
+        // 자동 업데이트 체크 — 실행 시 1회 + 6시간마다 재평가(실제 조회는 24시간 경과 시에만)
+        Task { @MainActor in
+            while true {
+                await UpdateChecker.autoCheckIfDue()
+                try? await Task.sleep(nanoseconds: 6 * 3_600 * 1_000_000_000)
+            }
+        }
 
         // 메인 창이 처음 뜰 때 isReleasedWhenClosed=false → 닫아도 메모리 유지(메뉴바에서 재표시 가능)
         NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in

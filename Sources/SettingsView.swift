@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 /// 환경설정 — macOS 시스템설정 스타일. 좌측 섹션 사이드바 + 우측 Form(레이블 좌 / 컨트롤 우).
 /// "Sweep Console" 토큰(Theme) + 다국어(tr) 적용.
@@ -103,6 +104,8 @@ struct GeneralSettings: View {
     @AppStorage("menuBarEnabled") private var menuBarEnabled = true
     @AppStorage("menuBarShowSize") private var menuBarShowSize = false
     @AppStorage("dockHidden") private var dockHidden = false
+    @AppStorage("launchAtLogin") private var launchAtLogin = false
+    @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
 
     var body: some View {
         Form {
@@ -151,6 +154,25 @@ struct GeneralSettings: View {
                     Text(tr("general.dockHideDesc", lang))
                 }
                 .disabled(!menuBarEnabled)
+                // 로그인 항목 등록 — 실패하면(미서명 앱 등) 토글을 원래대로 되돌린다.
+                Toggle(isOn: $launchAtLogin) {
+                    Text(tr("general.launchAtLogin", lang))
+                    Text(tr("general.launchAtLoginDesc", lang))
+                }
+                .onChange(of: launchAtLogin) { _, on in
+                    do {
+                        if on { try SMAppService.mainApp.register() }
+                        else { try SMAppService.mainApp.unregister() }
+                    } catch {
+                        launchAtLogin = !on
+                    }
+                }
+            }
+            Section {
+                Toggle(isOn: $autoUpdateCheck) {
+                    Text(tr("general.autoUpdate", lang))
+                    Text(tr("general.autoUpdateDesc", lang))
+                }
             }
         }
         .formStyle(.grouped)

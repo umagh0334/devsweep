@@ -45,6 +45,23 @@ final class UpdateChecker {
         }
     }
 
+    /// 백그라운드 자동 체크 — 마지막 체크 후 24시간이 지났을 때만 확인하고,
+    /// **새 버전이 있을 때만** 알림을 띄운다(없으면 조용). 설정에서 끌 수 있음.
+    @MainActor
+    static func autoCheckIfDue() async {
+        guard UserDefaults.standard.object(forKey: "autoUpdateCheck") as? Bool ?? true else { return }
+        let last = UserDefaults.standard.double(forKey: "lastUpdateCheckTs")
+        let now = Date().timeIntervalSince1970
+        guard now - last > 86_400 else { return }
+        UserDefaults.standard.set(now, forKey: "lastUpdateCheckTs")
+
+        let checker = UpdateChecker()
+        await checker.check()
+        if case let .updateAvailable(tag, _, _, _) = checker.status {
+            Notifier.updateAvailable(tag: tag)
+        }
+    }
+
     /// semver 비교 ("1.2.0" > "1.1.3"). 컴포넌트별 정수 비교, 길이 다르면 0 패딩.
     static func isNewer(_ a: String, than b: String) -> Bool {
         let pa = a.split(separator: ".").map { Int($0) ?? 0 }

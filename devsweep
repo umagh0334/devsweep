@@ -25,16 +25,16 @@ set -euo pipefail
 #    SAFE_CATS  : `clean`/`clean all`에 포함되는 기본 안전 카테고리
 #    HEAVY_CATS : 재설치/재다운로드 비용이 큰 것 — 이름을 직접 지정해야만 정리
 # ─────────────────────────────────────────────────────────────
-SAFE_CATS=(gradle npm yarn pnpm bun pip uv cargo go cocoapods swiftpm composer nuget deno brew colima xcode vscode cursor zed codemate)
+SAFE_CATS=(gradle npm yarn pnpm bun pip uv cargo go cocoapods swiftpm composer nuget deno brew colima xcode vscode cursor zed codemate electron ccache gem poetry carthage)
 # 기본 clean·자동정리(SAFE 전체)에서 제외하고 이름/‘all’ 지정 때만 정리하는 항목:
 #   - docker : prune 이 중지 컨테이너/네트워크/빌드캐시까지 지우는 '상태성 큰' 작업
 #   - maven  : ~/.m2/repository 에 'mvn install' 한 로컬/사내 SNAPSHOT 이 섞여 재다운로드 불가할 수 있음
 #   - pub    : ~/.pub-cache 에 flutter 로컬 패키지 등 원격에 없는 artifact 가 섞일 수 있음
-HEAVY_CATS=(docker maven pub playwright rustup-targets xcode-sim huggingface jetbrains androidstudio codex)
+HEAVY_CATS=(docker maven pub playwright rustup-targets xcode-sim huggingface jetbrains androidstudio codex puppeteer cypress ollama lmstudio xcode-devsupport simruntime conda bazel)
 # 네이티브 cleanup 명령(또는 prune)으로 정리되는 카테고리 — 나이 필터(--older-than) 미적용
-NATIVE_CATS=(npm yarn pnpm pip uv brew docker rustup-targets go nuget xcode-sim)
+NATIVE_CATS=(npm yarn pnpm pip uv brew docker rustup-targets go nuget xcode-sim conda simruntime)
 # 경로가 없어(VM/메타데이터) 나이 필터(--older-than) 측정·정리가 불가능한 카테고리
-NO_AGE_CATS=(docker rustup-targets xcode-sim codex)
+NO_AGE_CATS=(docker rustup-targets xcode-sim codex simruntime)
 
 # ─────────────────────────────────────────────────────────────
 #  보호 목록 (protect list)
@@ -152,7 +152,8 @@ do_cargo()  { handle_paths "$1" "cargo" "재다운로드" -- \
 
 do_xcode()  { handle_paths "$1" "xcode" "재생성" -- "$HOME/Library/Developer/Xcode/DerivedData"; }
 
-do_playwright() { handle_paths "$1" "playwright" "재다운로드(무거움)" -- "$HOME/Library/Caches/ms-playwright"; }
+do_playwright() { handle_paths "$1" "playwright" "재다운로드(무거움)" -- \
+  "$HOME/Library/Caches/ms-playwright" "$HOME/Library/Caches/ms-playwright-go"; }
 
 # ── 추가 카테고리 (경로형) ──
 do_maven()     { handle_paths "$1" "maven" "재다운로드" -- "$HOME/.m2/repository"; }
@@ -171,10 +172,12 @@ do_androidstudio() { handle_paths "$1" "androidstudio" "재생성" -- $HOME/Libr
 do_zed()           { handle_paths "$1" "zed" "재생성" -- "$HOME/Library/Caches/dev.zed.Zed"; }
 do_vscode() { handle_paths "$1" "vscode" "재생성" -- \
   "$HOME/Library/Application Support/Code/Cache" "$HOME/Library/Application Support/Code/CachedData" \
-  "$HOME/Library/Application Support/Code/Code Cache" "$HOME/Library/Application Support/Code/GPUCache"; }
+  "$HOME/Library/Application Support/Code/Code Cache" "$HOME/Library/Application Support/Code/GPUCache" \
+  "$HOME/Library/Application Support/Code/CachedExtensionVSIXs"; }
 do_cursor() { handle_paths "$1" "cursor" "재생성" -- \
   "$HOME/Library/Application Support/Cursor/Cache" "$HOME/Library/Application Support/Cursor/CachedData" \
-  "$HOME/Library/Application Support/Cursor/Code Cache" "$HOME/Library/Application Support/Cursor/GPUCache"; }
+  "$HOME/Library/Application Support/Cursor/Code Cache" "$HOME/Library/Application Support/Cursor/GPUCache" \
+  "$HOME/Library/Application Support/Cursor/CachedExtensionVSIXs"; }
 # CodeMate(자체 IDE): 로그/캐시만 — 설치 본체(lib·bin)·DB·인증·설정은 절대 건드리지 않음
 do_codemate() { handle_paths "$1" "codemate" "재생성" -- \
   "$HOME/.codemate/userdata/logs" "$HOME/.codemate/caches" "$HOME/.codemate/daemon.log"; }
@@ -195,6 +198,63 @@ do_uv() {
 
 # codex 런타임 캐시(재다운로드 큼) — ~/.codex(세션·설정)은 절대 건드리지 않음
 do_codex() { handle_paths "$1" "codex" "재다운로드(무거움)" -- "$HOME/.cache/codex-runtimes"; }
+
+# ── 추가 카테고리 (v0.1.5) ──
+# Electron: 바이너리 다운로드 캐시 + electron-builder 배포도구 캐시. 다음 빌드 때 재다운로드.
+do_electron()  { handle_paths "$1" "electron" "재다운로드" -- \
+  "$HOME/Library/Caches/electron" "$HOME/Library/Caches/electron-builder"; }
+# ccache/sccache: 컴파일 캐시 — 지워도 재빌드만 느려짐(네트워크 불필요).
+do_ccache()    { handle_paths "$1" "ccache" "재생성" -- \
+  "$HOME/.ccache" "$HOME/Library/Caches/ccache" "$HOME/Library/Caches/Mozilla.sccache"; }
+# RubyGems/bundler: 다운로드한 .gem 원본 캐시만(설치된 gem 본체는 건드리지 않음).
+do_gem()       { handle_paths "$1" "gem" "재다운로드" -- $HOME/.gem/ruby/*/cache "$HOME/.bundle/cache"; }
+do_poetry()    { handle_paths "$1" "poetry" "재다운로드" -- "$HOME/Library/Caches/pypoetry"; }
+do_carthage()  { handle_paths "$1" "carthage" "재다운로드" -- "$HOME/Library/Caches/org.carthage.CarthageKit"; }
+do_puppeteer() { handle_paths "$1" "puppeteer" "재다운로드(무거움)" -- "$HOME/.cache/puppeteer"; }
+do_cypress()   { handle_paths "$1" "cypress" "재다운로드(무거움)" -- "$HOME/Library/Caches/Cypress"; }
+# 로컬 LLM 모델 — 개당 수GB~수십GB. 모델만, 설정/대화기록은 제외.
+do_ollama()    { handle_paths "$1" "ollama" "재다운로드(무거움)" -- "$HOME/.ollama/models"; }
+do_lmstudio()  { handle_paths "$1" "lmstudio" "재다운로드(무거움)" -- \
+  "$HOME/.lmstudio/models" "$HOME/.cache/lm-studio"; }
+# iOS/watchOS/tvOS DeviceSupport: 기기 심볼 — 기기 재연결 시 Xcode 가 재생성(기기 필요).
+do_xcode-devsupport() { handle_paths "$1" "xcode-devsupport" "재생성" -- \
+  "$HOME/Library/Developer/Xcode/iOS DeviceSupport" \
+  "$HOME/Library/Developer/Xcode/watchOS DeviceSupport" \
+  "$HOME/Library/Developer/Xcode/tvOS DeviceSupport"; }
+# Bazel: 출력 베이스(홈 밖 /private/var/tmp 포함) — 지우면 전체 재빌드.
+do_bazel()     { handle_paths "$1" "bazel" "재생성" -- \
+  "$HOME/.cache/bazel" "/private/var/tmp/_bazel_$USER"; }
+# conda/mamba 패키지 캐시: 네이티브 conda clean 우선, 없으면 pkgs 디렉터리 정리.
+do_conda() {
+  local dirs=("$HOME/miniconda3/pkgs" "$HOME/miniforge3/pkgs" "$HOME/anaconda3/pkgs" "$HOME/.conda/pkgs")
+  case "$1" in
+    size) paths_size_kb "${dirs[@]}" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "conda" "$(human "$(paths_size_kb "${dirs[@]}")")" "재다운로드(무거움)" ;;
+    json) emit_json conda "$(paths_size_kb "${dirs[@]}")" "재다운로드(무거움)" ;;
+    paths) printf '%s\n' "${dirs[@]}" ;;
+    clean)
+      if command -v conda >/dev/null 2>&1; then conda clean -ay >/dev/null 2>&1 || wipe "${dirs[@]}"
+      else wipe "${dirs[@]}"; fi ;;
+  esac
+}
+# 구버전 시뮬레이터 런타임: 버전당 5~8GB. **사용 불가(Unusable/Unknown) 상태만** 삭제 —
+# 현재 쓰는 런타임은 절대 건드리지 않는다. 파싱 실패하면 아무것도 안 함(안전한 no-op).
+do_simruntime() {
+  case "$1" in
+    size) echo 0 ;;   # 런타임 용량은 simctl 로 정확 측정이 어려워 0 표기(정리는 동작)
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "simruntime" "  ~?" "사용불가 시뮬 런타임" ;;
+    json) emit_json simruntime 0 "사용불가 시뮬 런타임" ;;
+    paths) : ;;
+    clean)
+      if command -v xcrun >/dev/null 2>&1; then
+        xcrun simctl runtime list 2>/dev/null \
+          | awk '/\(Unusable|\(Unknown/ {for(i=1;i<=NF;i++) if ($i ~ /^\([0-9A-Fa-f-]{36}\)$/) {gsub(/[()]/,"",$i); print $i}}' \
+          | while read -r rid; do
+              [ -n "$rid" ] && xcrun simctl runtime delete "$rid" >/dev/null 2>&1 || true
+            done
+      fi ;;
+  esac
+}
 
 # go: 네이티브 go clean 우선 (modcache는 읽기전용이라 rm 전 chmod 필요)
 do_go() {
@@ -234,14 +294,16 @@ do_xcode-sim() {
 
 # npm: 네이티브 cleanup 우선
 do_npm() {
+  local p1="$HOME/.npm/_cacache" p2="$HOME/.npm/_npx"
   case "$1" in
-    size) paths_size_kb "$HOME/.npm/_cacache" ;;
-    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "npm" "$(human "$(paths_size_kb "$HOME/.npm/_cacache")")" "재다운로드" ;;
-    json) emit_json npm "$(paths_size_kb "$HOME/.npm/_cacache")" "재다운로드" ;;
-    paths) printf '%s\n' "$HOME/.npm/_cacache" ;;
+    size) paths_size_kb "$p1" "$p2" ;;
+    dry)  printf "  %-16s %6s  ${C_DIM}%s${C_0}\n" "npm" "$(human "$(paths_size_kb "$p1" "$p2")")" "재다운로드" ;;
+    json) emit_json npm "$(paths_size_kb "$p1" "$p2")" "재다운로드" ;;
+    paths) printf '%s\n%s\n' "$p1" "$p2" ;;
     clean)
-      if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || wipe "$HOME/.npm/_cacache"
-      else wipe "$HOME/.npm/_cacache"; fi ;;
+      if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || wipe "$p1"
+      else wipe "$p1"; fi
+      wipe "$p2" ;;   # _npx 는 npm cache clean 이 안 건드림 → 별도 정리
   esac
 }
 
@@ -528,6 +590,58 @@ cmd_detail() {
       kind="재다운로드(무거움)"; regen_cost="high"
       regen_note="Codex CLI가 런타임(약 1GB+)을 다시 받아야 함. ~/.codex 의 세션·설정은 건드리지 않음."
       command="rm -rf ~/.cache/codex-runtimes" ;;
+    electron)
+      regen_note="다음 빌드 때 Electron 바이너리·배포도구를 다시 받음."
+      command="rm -rf ~/Library/Caches/electron ~/Library/Caches/electron-builder" ;;
+    ccache)
+      kind="재생성"; regen_cost="low"
+      regen_note="컴파일 캐시라 다음 빌드만 느려짐(네트워크 불필요)."
+      command="rm -rf ~/.ccache ~/Library/Caches/ccache ~/Library/Caches/Mozilla.sccache" ;;
+    gem)
+      regen_note="gem/bundler 가 rubygems.org 에서 다시 받음. 설치된 gem 본체는 그대로."
+      command="rm -rf ~/.gem/ruby/*/cache ~/.bundle/cache" ;;
+    poetry)
+      regen_note="poetry 가 PyPI 에서 패키지를 다시 받음."
+      command="rm -rf ~/Library/Caches/pypoetry" ;;
+    carthage)
+      regen_note="carthage bootstrap 시 의존성을 다시 받아 빌드함."
+      command="rm -rf ~/Library/Caches/org.carthage.CarthageKit" ;;
+    puppeteer)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="Puppeteer 가 Chromium(수백MB)을 다시 받아야 함."
+      command="rm -rf ~/.cache/puppeteer" ;;
+    cypress)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="Cypress 바이너리(버전별 수백MB)를 다시 받아야 함."
+      command="rm -rf ~/Library/Caches/Cypress" ;;
+    ollama)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="LLM 모델(개당 수GB~수십GB)을 다시 받아야 함. 매우 오래 걸림. 설정·대화기록은 제외."
+      command="rm -rf ~/.ollama/models" ;;
+    lmstudio)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="LM Studio 모델(개당 수GB~수십GB)을 다시 받아야 함."
+      command="rm -rf ~/.lmstudio/models ~/.cache/lm-studio" ;;
+    xcode-devsupport)
+      kind="재생성"; regen_cost="high"
+      regen_note="기기를 다시 연결하면 Xcode 가 심볼을 재생성함(실기기 필요, 수분 소요)."
+      command="rm -rf ~/Library/Developer/Xcode/*\ DeviceSupport" ;;
+    bazel)
+      kind="재생성"; regen_cost="high"
+      regen_note="출력 베이스를 지우면 다음 빌드가 전체 재빌드가 됨(시간 큼)."
+      command="rm -rf ~/.cache/bazel /private/var/tmp/_bazel_\$USER" ;;
+    conda)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="conda 가 패키지 tarball 을 다시 받음. 설치된 환경(envs)은 건드리지 않음."
+      fallback="rm -rf ~/miniconda3/pkgs ~/miniforge3/pkgs ~/anaconda3/pkgs ~/.conda/pkgs"
+      if command -v conda >/dev/null 2>&1; then method="native"; command="conda clean -ay"
+      else method="rm"; command="$fallback"; native_avail="false"; fi ;;
+    simruntime)
+      kind="재다운로드(무거움)"; regen_cost="high"
+      regen_note="지운 런타임이 필요하면 Xcode 에서 다시 받아야 함(버전당 5~8GB)."
+      extra="사용 불가(Unusable/Unknown) 상태의 런타임만 삭제합니다. 현재 쓰는 런타임은 보존."
+      if command -v xcrun >/dev/null 2>&1; then method="native"; command="xcrun simctl runtime delete <사용불가 런타임>"
+      else method="rm"; command="(Xcode 명령줄 도구 없음)"; native_avail="false"; fi ;;
   esac
 
   # ── 안전성 (SAFE/HEAVY 소속 기반) ──

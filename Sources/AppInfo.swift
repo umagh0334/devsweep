@@ -13,6 +13,14 @@ enum AppInfo {
     static let repoOwner = "umagh0334"    // 개인 GitHub 계정
     static let repoName  = "devsweep"
 
+    /// App Translocation(읽기전용 임시 마운트)에서 실행 중인지.
+    /// 다운로드한 zip 을 그대로 실행하면 macOS 가 앱을 임시 경로에서 돌려서 **자동 업데이트가 실패**한다.
+    /// /Applications 로 옮기면 해소되므로 앱이 감지해 안내한다.
+    static var isTranslocated: Bool {
+        let p = Bundle.main.bundlePath
+        return p.contains("/AppTranslocation/") || p.hasPrefix("/private/var/folders/")
+    }
+
     /// 자동 업데이트 신뢰 앵커 — 릴리스 zip 서명 검증용 Ed25519 공개키(base64, 32바이트 raw).
     /// 대응 개인키는 repo 밖(`~/.config/devsweep/update_ed25519.key`)에만 존재하며 `build.sh --release`
     /// 가 zip 을 서명해 `.app.zip.sig` asset 을 만든다. ad-hoc 서명은 누구나 재서명 가능하므로,

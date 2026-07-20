@@ -43,6 +43,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if AppInfo.isTranslocated { translocationBanner }
             if let err = engine.errorMessage { errorBanner(err) }
             if appMode == 1 {
                 projectScanView
@@ -467,6 +468,42 @@ struct ContentView: View {
         else { Task { await engine.clean(targets: req.targets) } }
     }
 
+    /// App Translocation 경고 — 임시 마운트에서 실행 중이면 자동 업데이트가 실패하므로
+    /// /Applications 로 복사 후 재실행을 1클릭으로 제안한다.
+    private var translocationBanner: some View {
+        HStack(spacing: 9) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tr("transloc.title", lang)).font(.callout.weight(.semibold)).foregroundStyle(.white)
+                Text(tr("transloc.body", lang)).font(.caption).foregroundStyle(.white.opacity(0.9))
+            }
+            Spacer()
+            Button(tr("transloc.move", lang)) { moveToApplications() }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .background(Theme.heavy)
+    }
+
+    /// /Applications 로 복사 → quarantine 제거 → 새 위치에서 재실행 후 종료.
+    private func moveToApplications() {
+        let fm = FileManager.default
+        let src = Bundle.main.bundleURL
+        let dest = URL(fileURLWithPath: "/Applications/\(src.lastPathComponent)")
+        do {
+            if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+            try fm.copyItem(at: src, to: dest)
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            p.arguments = ["-dr", "com.apple.quarantine", dest.path]
+            try? p.run(); p.waitUntilExit()
+            NSWorkspace.shared.open(dest)
+            NSApp.terminate(nil)
+        } catch {
+            engine.errorMessage = tr("transloc.failFmt", lang, error.localizedDescription)
+        }
+    }
+
     // ── 프로젝트 폴더 스캐너 뷰 ──
 
     private var filteredProjects: [ProjectDir] {
@@ -677,6 +714,28 @@ struct ContentView: View {
             }
             .frame(height: min(CGFloat(total) * 33 + 3, 224))
             .padding(.top, 14)
+
+            // 휴지통 모드로 옮긴 게 있으면 — 비우기 전엔 실제 공간이 안 늘어남을 알리고 마감시킨다.
+            if engine.cleanDone, !engine.trashedURLs.isEmpty {
+                VStack(spacing: 7) {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "trash").font(.system(size: 11)).foregroundStyle(Theme.heavy)
+                        Text(tr("trash.pendingFmt", lang, humanKB(engine.cleanReclaimedKB)))
+                            .font(.caption).foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    HStack(spacing: 8) {
+                        Button(tr("trash.open", lang)) { engine.openTrash() }
+                            .controlSize(.small)
+                        Button(tr("trash.purge", lang)) { engine.emptyTrashedItems() }
+                            .controlSize(.small).tint(Theme.danger)
+                    }
+                }
+                .padding(.horizontal, 11).padding(.vertical, 9)
+                .background(RoundedRectangle(cornerRadius: 9).fill(Theme.heavy.opacity(0.12)))
+                .padding(.horizontal, 20).padding(.top, 14)
+            }
 
             if engine.cleanDone {
                 Button { engine.dismissCleanProgress() } label: {
