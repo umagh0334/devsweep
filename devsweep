@@ -806,6 +806,81 @@ cmd_scan_projects() {
   printf ']\n'
 }
 
+# ── 보안 점검(민감 파일 스캐너) ───────────────────────────────
+# 파일명(+전체경로)으로 민감 종류를 판정. 제외/미분류면 비0 반환. 출력: env|key|cred|state
+#   .env.example 류·공개키(.pub)는 위험이 아니므로 제외. credentials 는 ~/.aws 아래만.
+secret_kind() {
+  local b="$1" full="$2"
+  case "$b" in
+    .env.example|.env.sample|.env.template|.env.dist|.env.*.example|.env.*.sample) return 1 ;;
+    .env|.env.*)                          echo env ;;
+    id_rsa|id_dsa|id_ecdsa|id_ed25519)    echo key ;;
+    *.pem|*.key|*.p12|*.pfx|*.keystore|*.jks) echo key ;;
+    .npmrc|.pypirc|.netrc|.git-credentials)   echo cred ;;
+    credentials) case "$full" in */.aws/credentials) echo cred ;; *) return 1 ;; esac ;;
+    *.tfstate|*.tfstate.backup)           echo state ;;
+    *) return 1 ;;
+  esac
+}
+
+# 파일의 git 노출 상태를 판정한다(내용 안 읽음, 파일명 경로만 git 에 질의).
+#   tracked   = 이미 커밋됨 → 히스토리에 노출(최악)
+#   untracked = repo 안이지만 gitignore 안 됨 → 다음 `git add .` 에 딸려갈 위험
+#   ignored   = gitignore 로 보호됨
+#   norepo    = git repo 밖 (또는 git 미설치)
+git_leak_state() {
+  local f="$1" dir base
+  command -v git >/dev/null 2>&1 || { echo norepo; return; }
+  dir=$(dirname "$f"); base=$(basename "$f")
+  git -C "$dir" rev-parse --show-toplevel >/dev/null 2>&1 || { echo norepo; return; }
+  if git -C "$dir" ls-files --error-unmatch -- "$base" >/dev/null 2>&1; then echo tracked; return; fi
+  if git -C "$dir" check-ignore -q -- "$base" 2>/dev/null; then echo ignored; return; fi
+  echo untracked
+}
+
+# 민감 파일 보안 점검 — root 아래에서 .env·개인키·크리덴셜 등을 찾아 위험도와 함께 JSON 출력.
+#   각: {"path","name","kind","risk","reason","git","perm"}
+#     kind: env|key|cred|state   risk: critical|high|medium|low   git: tracked|untracked|ignored|norepo
+#   ⚠️ 파일 내용은 절대 읽지 않는다 — 파일명·git 상태·권한만으로 판정(프라이버시). 삭제도 안 함(리포트 전용).
+#   node_modules·vendor·Pods·Library·.Trash·.git 는 스킵. usage: scan-secrets [root]
+cmd_scan_secrets() {
+  local root="${1:-$HOME}"
+  root="${root/#\~/$HOME}"
+  [ -d "$root" ] || { printf '[]\n'; return 0; }
+  local first=1 f base kind risk reason gitst perm go
+  printf '['
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    base=$(basename "$f")
+    kind=$(secret_kind "$base" "$f") || continue     # 제외 대상(.env.example 등)이면 건너뜀
+    gitst=$(git_leak_state "$f")
+    perm=$(stat -f '%OLp' "$f" 2>/dev/null || echo "")
+    # 위험도: git 노출 상태를 1차 기준으로
+    risk=low; reason="info"
+    case "$gitst" in
+      tracked)   risk=critical; reason="tracked" ;;
+      untracked) risk=high;     reason="untracked" ;;
+    esac
+    # 개인키인데 group/other 접근 가능(권한 느슨) → git 위험이 낮을 때 medium 로 승격
+    if [ "$kind" = key ] && [ -n "$perm" ]; then
+      go="${perm: -2}"
+      if [ "$go" != "00" ] && [ "$risk" = low ]; then risk=medium; reason="perm"; fi
+    fi
+    [ "$first" -eq 1 ] && first=0 || printf ','
+    printf '{"path":"%s","name":"%s","kind":"%s","risk":"%s","reason":"%s","git":"%s","perm":"%s"}' \
+      "$(json_escape "$f")" "$(json_escape "$base")" "$kind" "$risk" "$reason" "$gitst" "$perm"
+  done < <(find "$root" \
+      \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \
+         -o -path '*/node_modules/*' -o -path '*/vendor/*' -o -path '*/Pods/*' \) -prune -o \
+      -type f \( -name '.env' -o -name '.env.*' \
+                 -o -name 'id_rsa' -o -name 'id_dsa' -o -name 'id_ecdsa' -o -name 'id_ed25519' \
+                 -o -name '*.pem' -o -name '*.key' -o -name '*.p12' -o -name '*.pfx' \
+                 -o -name '*.keystore' -o -name '*.jks' \
+                 -o -name '.npmrc' -o -name '.pypirc' -o -name '.netrc' -o -name '.git-credentials' \
+                 -o -name 'credentials' -o -name '*.tfstate' -o -name '*.tfstate.backup' \) -print 2>/dev/null)
+  printf ']\n'
+}
+
 # ── 엔트리포인트 ─────────────────────────────────────────────
 # 전역 옵션: --older-than=Nd|Nw|N (모든 명령 공통 — scan/json/detail/clean 의 측정·정리에 적용)
 AGE_DAYS=""
@@ -834,6 +909,7 @@ case "${1:-scan}" in
   total)       cmd_total ;;
   paths)       shift; cmd_paths "$@" ;;
   scan-projects) shift; cmd_scan_projects "${1:-}" ;;
+  scan-secrets)  shift; cmd_scan_secrets "${1:-}" ;;
   -h|--help|help) awk 'NR>=2 && /^set /{exit} NR>=2{sub(/^# ?/,""); print}' "$0" ;;
   *) echo "알 수 없는 명령: $1  ('devsweep --help' 참고)" >&2; exit 1 ;;
 esac

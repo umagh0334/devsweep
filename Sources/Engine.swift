@@ -27,6 +27,11 @@ final class Engine {
     var projectDirs: [ProjectDir] = []
     var projectScanRoot = ""
 
+    // ── 보안 점검(민감 파일 스캐너) 상태 ──
+    var isScanningSecrets = false
+    var secretFindings: [SecretFinding] = []
+    var secretScanRoot = ""
+
     /// 펼친 카테고리의 상세 정보 캐시 (lazy 로드). 정리/재스캔 후 무효화됨.
     var detailCache: [String: CategoryDetail] = [:]
     var loadingDetails: Set<String> = []
@@ -284,6 +289,81 @@ final class Engine {
         return String(s)
     }
 
+    // ── 보안 점검(민감 파일 스캐너) ──
+
+    /// root 아래에서 민감 파일(.env·개인키·크리덴셜)을 찾아 위험도 내림차순으로 갱신.
+    /// CLI 는 파일 내용을 읽지 않고 파일명·git 상태·권한만으로 판정한다(프라이버시).
+    func scanSecrets(root: String) async {
+        guard !isScanningSecrets else { return }
+        isScanningSecrets = true; errorMessage = nil
+        defer { isScanningSecrets = false }
+        guard let path = enginePath else { errorMessage = tr("err.engineMissing", uiLang); return }
+        do {
+            let out = try await run([path, "scan-secrets", root])
+            var found = try JSONDecoder().decode([SecretFinding].self, from: Data(out.utf8))
+            found.sort { $0.risk.severity != $1.risk.severity
+                            ? $0.risk.severity > $1.risk.severity        // 위험도 높은 순
+                            : $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            secretFindings = found
+            secretScanRoot = root
+        } catch {
+            errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
+        }
+    }
+
+    /// 위험 항목이 속한 repo 의 .gitignore 에 파일명을 추가한다(누수 방지 조치). 이미 있으면 무시.
+    /// 파일 자체는 건드리지 않고 .gitignore 한 줄만 append → 재스캔 시 ignored 로 강등된다.
+    /// tracked(이미 커밋됨) 항목은 gitignore 만으로 히스토리가 지워지지 않으므로 UI 에서 노출하지 않는다.
+    func addToGitignore(_ finding: SecretFinding) async {
+        let fileURL = URL(fileURLWithPath: finding.path)
+        let dir = fileURL.deletingLastPathComponent().path
+        do {
+            // repo 루트 확인
+            let top = try await run(["-c", "cd \(shq(dir)) && git rev-parse --show-toplevel"])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !top.isEmpty else { errorMessage = tr("sec.errNoRepo", uiLang); return }
+            let repoURL = URL(fileURLWithPath: top)
+            let rel = relativePath(of: fileURL, under: repoURL)   // repo 기준 상대경로 한 줄
+            let giURL = repoURL.appendingPathComponent(".gitignore")
+            var text = (try? String(contentsOf: giURL, encoding: .utf8)) ?? ""
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            if lines.contains(where: { $0.trimmingCharacters(in: .whitespaces) == rel }) {
+                // 이미 무시 대상 — 파일만 상태 갱신
+            } else {
+                if !text.isEmpty && !text.hasSuffix("\n") { text += "\n" }
+                text += rel + "\n"
+                try text.write(to: giURL, atomically: true, encoding: .utf8)
+            }
+            // 로컬 목록에서 해당 항목을 ignored/low 로 갱신(재스캔 없이 즉시 반영)
+            if let i = secretFindings.firstIndex(where: { $0.id == finding.id }) {
+                secretFindings[i].git = "ignored"
+                secretFindings[i].risk = .low
+                secretFindings[i].reason = "protected"
+                secretFindings.sort { $0.risk.severity != $1.risk.severity
+                                        ? $0.risk.severity > $1.risk.severity
+                                        : $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            }
+        } catch {
+            errorMessage = tr("sec.errGitignore", uiLang, error.localizedDescription)
+        }
+    }
+
+    /// Finder 에서 해당 파일을 선택 상태로 연다(파일을 열지 않고 위치만 보여줌 — 안전).
+    func revealInFinder(_ path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    /// URL 을 base 아래 상대경로로. base 밖이면 파일명만 반환(방어).
+    private func relativePath(of url: URL, under base: URL) -> String {
+        let b = base.standardizedFileURL.path
+        let f = url.standardizedFileURL.path
+        if f.hasPrefix(b + "/") { return String(f.dropFirst(b.count + 1)) }
+        return url.lastPathComponent
+    }
+
+    /// bash -c 문자열에 안전하게 넣기 위한 작은따옴표 이스케이프.
+    private func shq(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
     /// 카테고리 선택(정리 대상) 토글 — 마스터 행 체크박스용 (정렬과 무관하게 이름으로 갱신).
     func setSelected(_ name: String, _ value: Bool) {
         if let i = categories.firstIndex(where: { $0.name == name }) {
@@ -421,4 +501,34 @@ struct ProjectDir: Identifiable, Decodable, Equatable {
     var selected: Bool = true          // JSON 에 없음 → 기본 선택
     var id: String { path }
     enum CodingKeys: String, CodingKey { case path; case sizeKB = "size_kb"; case ageDays = "age_days" }
+}
+
+/// 보안 점검이 찾은 민감 파일 1개. CLI 는 파일명·git 상태·권한만 보고 판정한다(내용 안 읽음).
+/// risk/reason/git 은 조치(gitignore 추가) 후 로컬에서 갱신하므로 var.
+struct SecretFinding: Identifiable, Decodable, Equatable {
+    let path: String
+    let name: String
+    let kind: SecretKind
+    var risk: SecretRisk
+    var reason: String     // tracked|untracked|perm|info|protected — UI 설명 문구 키
+    var git: String        // tracked|untracked|ignored|norepo
+    let perm: String
+    var id: String { path }
+    enum CodingKeys: String, CodingKey { case path, name, kind, risk, reason, git, perm }
+}
+
+/// 민감 파일 종류 — 아이콘/설명 분기용.
+enum SecretKind: String, Decodable { case env, key, cred, state }
+
+/// 노출 위험도. severity 는 정렬 키(높을수록 위험).
+enum SecretRisk: String, Decodable {
+    case critical, high, medium, low
+    var severity: Int {
+        switch self {
+        case .critical: return 3
+        case .high:     return 2
+        case .medium:   return 1
+        case .low:      return 0
+        }
+    }
 }

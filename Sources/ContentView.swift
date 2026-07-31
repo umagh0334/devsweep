@@ -24,9 +24,11 @@ struct ContentView: View {
     @AppStorage("olderThanDays") private var olderThanDays = 0
     @AppStorage("sortMode") private var sortMode = 0     // 0=크기순(기본) 1=이름순
     @AppStorage("deleteMode") private var deleteMode = 0 // 0=휴지통(기본·복구가능) 1=완전삭제
-    @AppStorage("appMode") private var appMode = 0       // 0=캐시 1=프로젝트 폴더 스캐너
+    @AppStorage("appMode") private var appMode = 0       // 0=캐시 1=프로젝트 폴더 스캐너 2=보안 점검
     @State private var scanRoot = ""                     // 프로젝트 스캔 위치(빈값=홈)
     @State private var projOldOnly = false               // 30일+ 미사용만 표시
+    @State private var secScanRoot = ""                  // 보안 점검 스캔 위치(빈값=홈)
+    @State private var secHideLow = false                // LOW(정보성) 항목 숨기기
 
     private var totalKB: Int { engine.categories.filter { !$0.protected }.reduce(0) { $0 + $1.sizeKB } }
     private var selectedKB: Int { engine.categories.filter(\.selected).reduce(0) { $0 + $1.sizeKB } }
@@ -47,6 +49,8 @@ struct ContentView: View {
             if let err = engine.errorMessage { errorBanner(err) }
             if appMode == 1 {
                 projectScanView
+            } else if appMode == 2 {
+                securityScanView
             } else {
                 HSplitView {
                     masterList
@@ -88,6 +92,10 @@ struct ContentView: View {
             if appMode == 1, engine.projectDirs.isEmpty, engine.projectScanRoot.isEmpty, !engine.isScanningProjects {
                 await engine.scanProjects(root: "~")
             }
+            // 보안 모드 첫 진입 시 홈을 자동 스캔
+            if appMode == 2, engine.secretFindings.isEmpty, engine.secretScanRoot.isEmpty, !engine.isScanningSecrets {
+                await engine.scanSecrets(root: "~")
+            }
         }
         .task(id: engine.categories.count) {
             if selectedDetail == nil { selectedDetail = ranked.first?.name }
@@ -121,6 +129,7 @@ struct ContentView: View {
                 Picker("", selection: $appMode) {
                     Text(tr("mode.cache", lang)).tag(0)
                     Text(tr("mode.projects", lang)).tag(1)
+                    Text(tr("mode.security", lang)).tag(2)
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.regular)
                 if appMode == 0 {
@@ -623,6 +632,169 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // ── 보안 점검(민감 파일) 뷰 ──
+
+    private var visibleFindings: [SecretFinding] {
+        secHideLow ? engine.secretFindings.filter { $0.risk != .low } : engine.secretFindings
+    }
+    private func riskCount(_ r: SecretRisk) -> Int { engine.secretFindings.filter { $0.risk == r }.count }
+
+    private var securityScanView: some View {
+        VStack(spacing: 0) {
+            // 툴바: 스캔 위치 · 폴더 선택 · 위험만 · 스캔
+            HStack(spacing: 8) {
+                Image(systemName: "lock.shield").foregroundStyle(Theme.sweep)
+                Text(secScanRoot.isEmpty ? "~/" : projDisplay(secScanRoot))
+                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                Button(tr("proj.pickFolder", lang)) { pickSecFolder() }.controlSize(.small)
+                Spacer()
+                Toggle(isOn: $secHideLow) { Text(tr("sec.hideLow", lang)).font(.caption) }
+                    .toggleStyle(.checkbox)
+                Button { Task { await engine.scanSecrets(root: secScanRoot.isEmpty ? "~" : secScanRoot) } } label: {
+                    HStack(spacing: 5) {
+                        if engine.isScanningSecrets { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                        else { Image(systemName: "magnifyingglass") }
+                        Text(tr("proj.scan", lang))
+                    }
+                }
+                .buttonStyle(.borderedProminent).controlSize(.small).disabled(engine.isScanningSecrets)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(.regularMaterial).overlay(alignment: .bottom) { Divider() }
+
+            // 본문
+            if engine.isScanningSecrets {
+                Spacer()
+                ProgressView(tr("sec.scanning", lang)).controlSize(.large)
+                Spacer()
+            } else if engine.secretFindings.isEmpty {
+                VStack(spacing: 10) {
+                    Spacer()
+                    if engine.secretScanRoot.isEmpty {
+                        Image(systemName: "lock.shield").font(.system(size: 30)).foregroundStyle(.secondary)
+                        Text(tr("sec.startHint", lang)).font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "checkmark.shield.fill").font(.system(size: 34)).foregroundStyle(.green)
+                        Text(tr("sec.clean", lang)).font(.callout).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity).multilineTextAlignment(.center)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        if visibleFindings.isEmpty {
+                            Text(tr("sec.allLowHidden", lang))
+                                .font(.callout).foregroundStyle(.secondary).padding(.top, 40)
+                        }
+                        ForEach(visibleFindings) { f in secretRow(f) }
+                    }
+                    .padding(10)
+                }
+            }
+
+            securitySummaryBar
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 민감 파일 1행 — 위험도 색 좌측바 · 종류 아이콘 · 파일명/경로 · 설명 · 조치 버튼.
+    private func secretRow(_ f: SecretFinding) -> some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 2).fill(riskColor(f.risk)).frame(width: 3, height: 34)
+            Image(systemName: kindIcon(f.kind)).font(.system(size: 14))
+                .foregroundStyle(riskColor(f.risk)).frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(f.name).font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                        .lineLimit(1).truncationMode(.middle)
+                    riskBadge(f.risk)
+                }
+                Text(reasonText(f)).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+                Text(projDisplay((f.path as NSString).deletingLastPathComponent))
+                    .font(.system(size: 9.5, design: .monospaced)).foregroundStyle(.tertiary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            // 조치: untracked(HIGH) 만 gitignore 로 즉시 보호 가능. tracked 는 히스토리라 불가.
+            if f.git == "untracked" {
+                Button(tr("sec.addGitignore", lang)) { Task { await engine.addToGitignore(f) } }
+                    .controlSize(.small).buttonStyle(.bordered)
+            }
+            Button(tr("sec.reveal", lang)) { engine.revealInFinder(f.path) }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 11).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(riskColor(f.risk).opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(riskColor(f.risk).opacity(0.18), lineWidth: 1))
+    }
+
+    /// 하단 요약: 위험도별 개수 + "삭제 안 함·내용 안 읽음" 안심 문구.
+    private var securitySummaryBar: some View {
+        HStack(spacing: 12) {
+            ForEach([SecretRisk.critical, .high, .medium, .low], id: \.rawValue) { r in
+                let n = riskCount(r)
+                if n > 0 {
+                    HStack(spacing: 4) {
+                        Circle().fill(riskColor(r)).frame(width: 8, height: 8)
+                        Text("\(riskLabel(r)) \(n)").font(.system(size: 11, weight: .medium))
+                    }
+                }
+            }
+            Spacer()
+            Text(tr("sec.footNote", lang)).font(.system(size: 10)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .background(.regularMaterial).overlay(alignment: .top) { Divider() }
+    }
+
+    private func pickSecFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = tr("proj.pickFolder", lang)
+        if panel.runModal() == .OK, let url = panel.url {
+            secScanRoot = url.path
+            Task { await engine.scanSecrets(root: url.path) }
+        }
+    }
+
+    private func riskColor(_ r: SecretRisk) -> Color {
+        switch r {
+        case .critical: return Theme.danger
+        case .high:     return .orange
+        case .medium:   return Color(nsColor: .systemYellow)
+        case .low:      return .secondary
+        }
+    }
+    private func riskLabel(_ r: SecretRisk) -> String { tr("sec.risk.\(r.rawValue)", lang) }
+    private func riskBadge(_ r: SecretRisk) -> some View {
+        Text(riskLabel(r)).font(.system(size: 8.5, weight: .bold, design: .rounded))
+            .textCase(.uppercase).tracking(0.4)
+            .padding(.horizontal, 5).padding(.vertical, 1.5)
+            .background(riskColor(r).opacity(0.18)).foregroundStyle(riskColor(r)).clipShape(Capsule())
+    }
+    private func kindIcon(_ k: SecretKind) -> String {
+        switch k {
+        case .env:   return "doc.text.fill"
+        case .key:   return "key.fill"
+        case .cred:  return "person.badge.key.fill"
+        case .state: return "externaldrive.fill"
+        }
+    }
+    private func reasonText(_ f: SecretFinding) -> String {
+        switch f.reason {
+        case "tracked":   return tr("sec.reason.tracked", lang)
+        case "untracked": return tr("sec.reason.untracked", lang)
+        case "perm":      return tr("sec.reason.perm", lang, f.perm)
+        case "protected": return tr("sec.reason.protected", lang)
+        default:          return f.git == "ignored" ? tr("sec.reason.protected", lang) : tr("sec.reason.info", lang)
+        }
     }
 
     // ── 정리 진행 창 (실시간) ──
