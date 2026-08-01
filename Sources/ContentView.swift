@@ -24,7 +24,9 @@ struct ContentView: View {
     @AppStorage("olderThanDays") private var olderThanDays = 0
     @AppStorage("sortMode") private var sortMode = 0     // 0=크기순(기본) 1=이름순
     @AppStorage("deleteMode") private var deleteMode = 0 // 0=휴지통(기본·복구가능) 1=완전삭제
-    @AppStorage("appMode") private var appMode = 0       // 0=캐시 1=프로젝트 폴더 스캐너 2=보안 점검
+    /// 0=홈 1=캐시 2=프로젝트 폴더 스캐너 3=보안 점검.
+    /// 의도적으로 세션 한정(@State) — 앱을 껐다 켜면 항상 홈에서 시작한다(마지막 탭 복원 안 함).
+    @State private var appMode = 0
     @State private var scanRoot = ""                     // 프로젝트 스캔 위치(빈값=홈)
     @State private var projOldOnly = false               // 30일+ 미사용만 표시
     @State private var secScanRoot = ""                  // 보안 점검 스캔 위치(빈값=홈)
@@ -32,6 +34,10 @@ struct ContentView: View {
     /// TCC 보호 폴더(데스크탑·문서·다운로드) 스캔 포함 — 기본 꺼짐(macOS 권한 팝업 방지).
     /// 켜는 순간 다음 스캔에서 의도된 팝업이 1회 뜬다. 프로젝트/보안 스캐너 공용.
     @AppStorage("scanProtectedFolders") private var scanProtected = false
+    // 홈 대시보드 — 시스템 볼륨 용량 (loadDiskStats 로 채움)
+    @State private var diskTotalKB = 0
+    @State private var diskFreeKB = 0
+    @State private var diskName = ""
 
     private var totalKB: Int { engine.categories.filter { !$0.protected }.reduce(0) { $0 + $1.sizeKB } }
     private var selectedKB: Int { engine.categories.filter(\.selected).reduce(0) { $0 + $1.sizeKB } }
@@ -50,9 +56,11 @@ struct ContentView: View {
             header
             if AppInfo.isTranslocated { translocationBanner }
             if let err = engine.errorMessage { errorBanner(err) }
-            if appMode == 1 {
-                projectScanView
+            if appMode == 0 {
+                homeView
             } else if appMode == 2 {
+                projectScanView
+            } else if appMode == 3 {
                 securityScanView
             } else {
                 HSplitView {
@@ -74,7 +82,7 @@ struct ContentView: View {
             // 메뉴바 "안전셋 정리…" → 캐시 모드로 전환·추천셋 선택·확인창 표시
             guard req else { return }
             appState.requestCleanRecommended = false
-            appMode = 0
+            appMode = 1
             engine.setRecommended()
             let sel = engine.categories.filter(\.selected)
             guard !sel.isEmpty else { return }
@@ -92,11 +100,11 @@ struct ContentView: View {
         .task { if autoScan { await engine.scan() } }
         .task(id: appMode) {
             // 프로젝트 모드 첫 진입 시 홈을 자동 스캔 (기본 자동, 이후 폴더 지정 가능)
-            if appMode == 1, engine.projectDirs.isEmpty, engine.projectScanRoot.isEmpty, !engine.isScanningProjects {
+            if appMode == 2, engine.projectDirs.isEmpty, engine.projectScanRoot.isEmpty, !engine.isScanningProjects {
                 await engine.scanProjects(root: "~")
             }
             // 보안 모드 첫 진입 시 홈을 자동 스캔
-            if appMode == 2, engine.secretFindings.isEmpty, engine.secretScanRoot.isEmpty, !engine.isScanningSecrets {
+            if appMode == 3, engine.secretFindings.isEmpty, engine.secretScanRoot.isEmpty, !engine.isScanningSecrets {
                 await engine.scanSecrets(root: "~")
             }
         }
@@ -132,12 +140,13 @@ struct ContentView: View {
                 // 모드 전환·숫자 폭 변화에도 방금 누른 탭이 커서 밑에서 밀려나지 않는다.
                 VStack(alignment: .trailing, spacing: 6) {
                     Picker("", selection: $appMode) {
-                        Text(tr("mode.cache", lang)).tag(0)
-                        Text(tr("mode.projects", lang)).tag(1)
-                        Text(tr("mode.security", lang)).tag(2)
+                        Image(systemName: "house.fill").tag(0)   // 홈 — 아이콘 세그먼트(4개 텍스트는 과밀)
+                        Text(tr("mode.cache", lang)).tag(1)
+                        Text(tr("mode.projects", lang)).tag(2)
+                        Text(tr("mode.security", lang)).tag(3)
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.regular)
-                    if appMode == 0 {
+                    if appMode == 1 {
                         VStack(alignment: .trailing, spacing: 0) {
                             Text(tr("recoverable", lang)).font(.caption2).foregroundStyle(.secondary)
                                 .textCase(.uppercase).tracking(0.6)
@@ -150,7 +159,7 @@ struct ContentView: View {
                     }
                 }
             }
-            if appMode == 0 { distributionBar }
+            if appMode == 1 { distributionBar }
         }
         .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 14)
         .background(.regularMaterial)
@@ -858,6 +867,182 @@ struct ContentView: View {
         case "permFixed": return tr("sec.reason.permFixed", lang)
         case "protected": return tr("sec.reason.protected", lang)
         default:          return f.git == "ignored" ? tr("sec.reason.protected", lang) : tr("sec.reason.info", lang)
+        }
+    }
+
+    // ── 홈 대시보드 ──
+    //   시그니처: 실제 디스크 사용량 게이지 안에 'DevSweep 이 돌려줄 수 있는 영역'(회수 가능)을 틸로 박아
+    //   "네 디스크에서 이만큼은 내가 비워줄 수 있다"를 한 눈에 보여준다. 카드 3장 = 각 모드 요약+바로가기.
+
+    private var homeView: some View {
+        VStack(spacing: 26) {
+            Spacer(minLength: 6)
+            diskGauge
+            HStack(spacing: 14) { cacheCard; projectsCard; securityCard }
+            // 추천 정리 — 메뉴바와 동일 플로우 재사용(캐시 탭 전환→추천셋 선택→확인창)
+            Button {
+                appState.requestCleanRecommended = true
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "sparkles")
+                    Text(tr("home.startRecommended", lang))
+                        .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                }
+                .padding(.horizontal, 10).padding(.vertical, 3)
+            }
+            .buttonStyle(.borderedProminent).controlSize(.large)
+            .disabled(totalKB == 0)
+            Spacer()
+        }
+        .padding(.horizontal, 30).padding(.top, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task { loadDiskStats() }
+    }
+
+    private var diskGauge: some View {
+        let total = max(diskTotalKB, 1)
+        let free = min(diskFreeKB, total)
+        let reclaim = min(totalKB, total - free)         // 회수 가능은 '사용 중' 영역의 일부
+        let usedOther = max(0, total - free - reclaim)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "internaldrive").foregroundStyle(.secondary)
+                Text(diskName.isEmpty ? "Macintosh HD" : diskName)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                Spacer()
+                Text(tr("home.freeFmt", lang, humanKB(free)))
+                    .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                HStack(spacing: 1.5) {
+                    RoundedRectangle(cornerRadius: 3).fill(Color.primary.opacity(0.26))
+                        .frame(width: geo.size.width * CGFloat(usedOther) / CGFloat(total))
+                    if reclaim > 0 {
+                        RoundedRectangle(cornerRadius: 3).fill(Theme.sweep)
+                            .frame(width: max(5, geo.size.width * CGFloat(reclaim) / CGFloat(total)))
+                    }
+                    RoundedRectangle(cornerRadius: 3).fill(Color.primary.opacity(0.07))
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .frame(height: 13)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            HStack(spacing: 16) {
+                legendDot(Color.primary.opacity(0.26), tr("home.usedFmt", lang, humanKB(total - free)))
+                if reclaim > 0 { legendDot(Theme.sweep, tr("recoverable", lang) + " " + humanKB(reclaim)) }
+            }
+        }
+    }
+
+    private func legendDot(_ c: Color, _ label: String) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(c).frame(width: 7, height: 7)
+            Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary)
+        }
+    }
+
+    /// 시스템 볼륨 총/여유 용량 — Finder 와 같은 기준(importantUsage).
+    private func loadDiskStats() {
+        let vals = try? URL(fileURLWithPath: "/").resourceValues(forKeys: [
+            .volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey, .volumeNameKey])
+        diskTotalKB = (vals?.volumeTotalCapacity ?? 0) / 1024
+        diskFreeKB = Int((vals?.volumeAvailableCapacityForImportantUsage ?? 0) / 1024)
+        diskName = vals?.volumeName ?? ""
+    }
+
+    private var cacheCard: some View {
+        HomeCard(tint: Theme.sweep,
+                 title: tr("mode.cache", lang),
+                 value: engine.isScanning ? tr("home.scanning", lang) : humanKB(totalKB),
+                 caption: tr("recoverable", lang),
+                 go: tr("home.go", lang),
+                 action: { appMode = 1 }) {
+            Icons.view("broom", size: 15).foregroundStyle(Theme.sweep)
+        }
+    }
+    private var projectsCard: some View {
+        let kb = engine.projectDirs.reduce(0) { $0 + $1.sizeKB }
+        let scanned = !engine.projectScanRoot.isEmpty
+        return HomeCard(tint: Theme.heavy,
+                 title: tr("mode.projects", lang),
+                 value: engine.isScanningProjects ? tr("home.scanning", lang)
+                        : scanned ? humanKB(kb) : tr("home.notScanned", lang),
+                 caption: scanned ? tr("home.foldersFmt", lang, engine.projectDirs.count)
+                                  : tr("home.projCaption", lang),
+                 go: tr("home.go", lang),
+                 action: { appMode = 2 }) {
+            Image(systemName: "folder.fill").font(.system(size: 13)).foregroundStyle(Theme.heavy)
+        }
+    }
+    private var securityCard: some View {
+        let scanned = !engine.secretScanRoot.isEmpty
+        let risks = engine.secretFindings.filter { $0.risk != .low }.count
+        let tint: Color = !scanned ? Color.secondary : risks > 0 ? .orange : .green
+        return HomeCard(tint: tint,
+                 title: tr("mode.security", lang),
+                 value: engine.isScanningSecrets ? tr("home.scanning", lang)
+                        : !scanned ? tr("home.notScanned", lang)
+                        : risks > 0 ? tr("home.riskFmt", lang, risks) : tr("home.riskNone", lang),
+                 caption: tr("home.secCaption", lang),
+                 go: tr("home.go", lang),
+                 action: { appMode = 3 }) {
+            Image(systemName: "lock.shield.fill").font(.system(size: 13)).foregroundStyle(tint)
+        }
+    }
+
+    /// 홈 카드 1장 — 전체가 버튼(해당 탭 이동), 호버 시 틴트 테두리 + 살짝 떠오름.
+    private struct HomeCard<Icon: View>: View {
+        let tint: Color
+        let title: String
+        let value: String
+        let caption: String
+        let go: String
+        let action: () -> Void
+        @ViewBuilder let icon: () -> Icon
+        @State private var hovering = false
+
+        var body: some View {
+            Button(action: action) {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 8) {
+                        ZStack {
+                            Circle().fill(tint.opacity(0.15)).frame(width: 30, height: 30)
+                            icon()
+                        }
+                        Text(title).font(.system(size: 13, weight: .semibold, design: .rounded))
+                        Spacer()
+                    }
+                    Spacer(minLength: 2)
+                    Text(value)
+                        .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .foregroundStyle(tint)
+                        .contentTransition(.numericText())
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                    Text(caption).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
+                    HStack {
+                        Spacer()
+                        HStack(spacing: 3) {
+                            Text(go)
+                            Image(systemName: "arrow.right")
+                        }
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(hovering ? AnyShapeStyle(tint) : AnyShapeStyle(.tertiary))
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, minHeight: 128, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.primary.opacity(hovering ? 0.07 : 0.045)))
+                .overlay(RoundedRectangle(cornerRadius: 12)
+                    .stroke(hovering ? tint.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1))
+                .scaleEffect(hovering ? 1.015 : 1)
+                .animation(.snappy(duration: 0.18), value: hovering)
+            }
+            .buttonStyle(.plain)
+            .onHover { h in
+                hovering = h
+                if h { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+            }
         }
     }
 
