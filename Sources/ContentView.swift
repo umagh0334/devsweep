@@ -29,6 +29,9 @@ struct ContentView: View {
     @State private var projOldOnly = false               // 30일+ 미사용만 표시
     @State private var secScanRoot = ""                  // 보안 점검 스캔 위치(빈값=홈)
     @State private var secHideLow = false                // LOW(정보성) 항목 숨기기
+    /// TCC 보호 폴더(데스크탑·문서·다운로드) 스캔 포함 — 기본 꺼짐(macOS 권한 팝업 방지).
+    /// 켜는 순간 다음 스캔에서 의도된 팝업이 1회 뜬다. 프로젝트/보안 스캐너 공용.
+    @AppStorage("scanProtectedFolders") private var scanProtected = false
 
     private var totalKB: Int { engine.categories.filter { !$0.protected }.reduce(0) { $0 + $1.sizeKB } }
     private var selectedKB: Int { engine.categories.filter(\.selected).reduce(0) { $0 + $1.sizeKB } }
@@ -61,7 +64,7 @@ struct ContentView: View {
                 footer
             }
         }
-        .frame(width: 900, height: 620)
+        .frame(width: 900, height: 650)
         .overlay { cleanConfirmOverlay }
         .overlay { cleanProgressOverlay }
         .animation(.snappy(duration: 0.22), value: cleanRequest)
@@ -125,22 +128,25 @@ struct ContentView: View {
                     }
                 }
                 Spacer()
-                // 모드 전환 — 캐시 정리 / 프로젝트 폴더 스캐너
-                Picker("", selection: $appMode) {
-                    Text(tr("mode.cache", lang)).tag(0)
-                    Text(tr("mode.projects", lang)).tag(1)
-                    Text(tr("mode.security", lang)).tag(2)
-                }
-                .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.regular)
-                if appMode == 0 {
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text(tr("recoverable", lang)).font(.caption2).foregroundStyle(.secondary)
-                            .textCase(.uppercase).tracking(0.6)
-                        Text(humanKB(totalKB))
-                            .font(.system(size: 30, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Theme.sweep)
-                            .contentTransition(.numericText())
-                            .animation(.snappy, value: totalKB)
+                // 우측 코너: 탭(상단 고정) + 회수량(그 아래, 캐시 모드만) — 탭이 항상 같은 자리라
+                // 모드 전환·숫자 폭 변화에도 방금 누른 탭이 커서 밑에서 밀려나지 않는다.
+                VStack(alignment: .trailing, spacing: 6) {
+                    Picker("", selection: $appMode) {
+                        Text(tr("mode.cache", lang)).tag(0)
+                        Text(tr("mode.projects", lang)).tag(1)
+                        Text(tr("mode.security", lang)).tag(2)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.regular)
+                    if appMode == 0 {
+                        VStack(alignment: .trailing, spacing: 0) {
+                            Text(tr("recoverable", lang)).font(.caption2).foregroundStyle(.secondary)
+                                .textCase(.uppercase).tracking(0.6)
+                            Text(humanKB(totalKB))
+                                .font(.system(size: 30, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Theme.sweep)
+                                .contentTransition(.numericText())
+                                .animation(.snappy, value: totalKB)
+                        }
                     }
                 }
             }
@@ -548,6 +554,12 @@ struct ContentView: View {
                     .lineLimit(1).truncationMode(.middle)
                 Button(tr("proj.pickFolder", lang)) { pickFolder() }.controlSize(.small)
                 Spacer()
+                Toggle(isOn: $scanProtected) { Text(tr("scan.includeProtected", lang)).font(.caption) }
+                    .toggleStyle(.checkbox)
+                    .help(tr("scan.includeProtectedHelp", lang))
+                    .onChange(of: scanProtected) { _, _ in
+                        Task { await engine.scanProjects(root: scanRoot.isEmpty ? "~" : scanRoot) }
+                    }
                 Toggle(isOn: $projOldOnly) { Text(tr("proj.oldOnly", lang)).font(.caption) }
                     .toggleStyle(.checkbox)
                 Button { Task { await engine.scanProjects(root: scanRoot.isEmpty ? "~" : scanRoot) } } label: {
@@ -651,6 +663,12 @@ struct ContentView: View {
                     .lineLimit(1).truncationMode(.middle)
                 Button(tr("proj.pickFolder", lang)) { pickSecFolder() }.controlSize(.small)
                 Spacer()
+                Toggle(isOn: $scanProtected) { Text(tr("scan.includeProtected", lang)).font(.caption) }
+                    .toggleStyle(.checkbox)
+                    .help(tr("scan.includeProtectedHelp", lang))
+                    .onChange(of: scanProtected) { _, _ in
+                        Task { await engine.scanSecrets(root: secScanRoot.isEmpty ? "~" : secScanRoot) }
+                    }
                 Toggle(isOn: $secHideLow) { Text(tr("sec.hideLow", lang)).font(.caption) }
                     .toggleStyle(.checkbox)
                 Button { Task { await engine.scanSecrets(root: secScanRoot.isEmpty ? "~" : secScanRoot) } } label: {
@@ -696,14 +714,54 @@ struct ContentView: View {
                 }
             }
 
+            if visibleFindings.contains(where: \.fixable) { securityActionBar }
             securitySummaryBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// 민감 파일 1행 — 위험도 색 좌측바 · 종류 아이콘 · 파일명/경로 · 설명 · 조치 버튼.
+    /// 일괄 조치 바 — 수정 가능(fixable) 항목이 보일 때만. 프로젝트 하단 바와 동일 패턴.
+    private var securityActionBar: some View {
+        let fixables = visibleFindings.filter(\.fixable)
+        let picked = fixables.filter(\.selected)
+        let allOn = !fixables.isEmpty && fixables.allSatisfy(\.selected)
+        return HStack(spacing: 10) {
+            Button { engine.setAllSecretsSelected(!allOn) } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: allOn ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(allOn ? AnyShapeStyle(Theme.sweep) : AnyShapeStyle(.secondary))
+                    Text(allOn ? tr("select.none", lang) : tr("select.all", lang))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                }
+            }.buttonStyle(.plain)
+            Spacer()
+            Text("\(picked.count) / \(fixables.count)")
+                .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+            Button {
+                Task { await engine.fixSelectedSecrets() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "wrench.and.screwdriver")
+                    Text(tr("sec.fixSelected", lang))
+                }
+            }
+            .buttonStyle(.borderedProminent).controlSize(.small)
+            .disabled(picked.isEmpty)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(.regularMaterial).overlay(alignment: .top) { Divider() }
+    }
+
+    /// 민감 파일 1행 — 체크박스(수정 가능 행만) · 위험도 색 좌측바 · 종류 아이콘 · 파일명/경로 · 설명 · 조치 버튼.
     private func secretRow(_ f: SecretFinding) -> some View {
         HStack(spacing: 10) {
+            if f.fixable {
+                Toggle("", isOn: Binding(get: { f.selected },
+                                         set: { engine.setSecretSelected(f.id, $0) }))
+                    .labelsHidden()
+            } else {
+                Spacer().frame(width: 14)   // 체크박스 자리 맞춤(심각·낮음은 일괄 조치 대상 아님)
+            }
             RoundedRectangle(cornerRadius: 2).fill(riskColor(f.risk)).frame(width: 3, height: 34)
             Image(systemName: kindIcon(f.kind)).font(.system(size: 14))
                 .foregroundStyle(riskColor(f.risk)).frame(width: 20)
@@ -723,6 +781,11 @@ struct ContentView: View {
             // 조치: untracked(HIGH) 만 gitignore 로 즉시 보호 가능. tracked 는 히스토리라 불가.
             if f.git == "untracked" {
                 Button(tr("sec.addGitignore", lang)) { Task { await engine.addToGitignore(f) } }
+                    .controlSize(.small).buttonStyle(.bordered)
+            }
+            // 권한 느슨한 개인키 → chmod 600 (git 상태와 독립 — untracked 키면 두 버튼이 나란히)
+            if f.kind == .key, f.perm.count >= 2, !f.perm.hasSuffix("00") {
+                Button(tr("sec.fixPerm", lang)) { engine.fixPermissions(f) }
                     .controlSize(.small).buttonStyle(.bordered)
             }
             Button(tr("sec.reveal", lang)) { engine.revealInFinder(f.path) }
@@ -792,6 +855,7 @@ struct ContentView: View {
         case "tracked":   return tr("sec.reason.tracked", lang)
         case "untracked": return tr("sec.reason.untracked", lang)
         case "perm":      return tr("sec.reason.perm", lang, f.perm)
+        case "permFixed": return tr("sec.reason.permFixed", lang)
         case "protected": return tr("sec.reason.protected", lang)
         default:          return f.git == "ignored" ? tr("sec.reason.protected", lang) : tr("sec.reason.info", lang)
         }

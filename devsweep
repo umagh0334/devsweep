@@ -780,6 +780,20 @@ cmd_paths() {
   done
 }
 
+# TCC 보호 폴더(데스크탑·문서·다운로드) prune 인자 계산 — 기본 스캔에서 제외해 macOS 권한 팝업 방지.
+#   --include-protected 시 빈 배열(전부 스캔). root 가 보호 폴더 안/자체면 그 폴더는 제외 안 함
+#   (사용자가 직접 지정한 의도 — NSOpenPanel 선택은 macOS 도 팝업 없이 허용).
+PROT_PRUNE=()
+set_prot_prune() {
+  local root="$1" d
+  PROT_PRUNE=()
+  [ "${INCLUDE_PROTECTED:-0}" = 1 ] && return 0
+  for d in "$HOME/Desktop" "$HOME/Documents" "$HOME/Downloads"; do
+    case "$root" in "$d"|"$d"/*) continue ;; esac
+    PROT_PRUNE+=(-o -path "$d")
+  done
+}
+
 # 프로젝트 폴더 스캐너 — root 아래에서 무거운 빌드/의존 폴더(node_modules 등)를 찾아 JSON 출력.
 #   각: {"path","size_kb","age_days"}. 찾은 폴더 내부는 -prune 로 재귀 안 함(중첩 중복/과탐색 방지).
 #   Library·.Trash·.git 는 스킵. 0KB 는 제외. usage: scan-projects [root]
@@ -798,8 +812,9 @@ cmd_scan_projects() {
     days=$(( (now - mt) / 86400 )); [ "$days" -lt 0 ] && days=0
     [ "$first" -eq 1 ] && first=0 || printf ','
     printf '{"path":"%s","size_kb":%s,"age_days":%s}' "$(json_escape "$d")" "$kb" "$days"
-  done < <(find "$root" \
-      \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \) -prune -o \
+  done < <(set_prot_prune "$root"; find "$root" \
+      \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \
+         ${PROT_PRUNE[@]+"${PROT_PRUNE[@]}"} \) -prune -o \
       -type d \( -name node_modules -o -name target -o -name .next -o -name .nuxt \
                  -o -name dist -o -name build -o -name Pods -o -name .venv -o -name venv \
                  -o -name __pycache__ -o -name .turbo -o -name .parcel-cache \) -prune -print 2>/dev/null)
@@ -869,9 +884,10 @@ cmd_scan_secrets() {
     [ "$first" -eq 1 ] && first=0 || printf ','
     printf '{"path":"%s","name":"%s","kind":"%s","risk":"%s","reason":"%s","git":"%s","perm":"%s"}' \
       "$(json_escape "$f")" "$(json_escape "$base")" "$kind" "$risk" "$reason" "$gitst" "$perm"
-  done < <(find "$root" \
+  done < <(set_prot_prune "$root"; find "$root" \
       \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \
-         -o -path '*/node_modules/*' -o -path '*/vendor/*' -o -path '*/Pods/*' \) -prune -o \
+         -o -path '*/node_modules/*' -o -path '*/vendor/*' -o -path '*/Pods/*' \
+         ${PROT_PRUNE[@]+"${PROT_PRUNE[@]}"} \) -prune -o \
       -type f \( -name '.env' -o -name '.env.*' \
                  -o -name 'id_rsa' -o -name 'id_dsa' -o -name 'id_ecdsa' -o -name 'id_ed25519' \
                  -o -name '*.pem' -o -name '*.key' -o -name '*.p12' -o -name '*.pfx' \
@@ -894,6 +910,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --older-than)   shift; set_age "${1:-}" ;;
     --older-than=*) set_age "${1#*=}" ;;
+    --include-protected) INCLUDE_PROTECTED=1 ;;   # 스캔에 TCC 보호 폴더 포함 (기본 제외)
     *) _args+=("$1") ;;
   esac
   shift

@@ -106,6 +106,7 @@ struct GeneralSettings: View {
     @AppStorage("dockHidden") private var dockHidden = false
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
+    @State private var fdaGranted = false   // 전체 디스크 접근 상태 (시스템 설정에서만 변경 가능)
 
     var body: some View {
         Form {
@@ -174,8 +175,46 @@ struct GeneralSettings: View {
                     Text(tr("general.autoUpdateDesc", lang))
                 }
             }
+            // 전체 디스크 접근(FDA) — 앱이 코드로 요청할 수 없고 사용자가 시스템 설정에서 켜야 한다.
+            // 켜면 보호 폴더(데스크탑·문서·다운로드) 포함 모든 스캔에서 macOS 확인창이 사라진다.
+            Section {
+                LabeledContent {
+                    HStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Image(systemName: fdaGranted ? "checkmark.circle.fill" : "circle.slash")
+                                .foregroundStyle(fdaGranted ? .green : .secondary)
+                            Text(tr(fdaGranted ? "general.fdaOn" : "general.fdaOff", lang))
+                                .foregroundStyle(fdaGranted ? .primary : .secondary)
+                        }
+                        if !fdaGranted {
+                            Button(tr("general.fdaOpen", lang)) {
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                } label: {
+                    Text(tr("general.fda", lang))
+                    Text(tr("general.fdaDesc", lang))
+                }
+            }
         }
         .formStyle(.grouped)
+        .onAppear { fdaGranted = Self.checkFDA() }
+        // 시스템 설정에서 돌아오면(앱 재활성화) 상태 재확인 — FDA 는 알림이 없어 폴링이 유일한 방법
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            fdaGranted = Self.checkFDA()
+        }
+    }
+
+    /// FDA 여부 판별 — FDA 없이는 절대 못 여는 TCC DB 를 열어본다(실패해도 팝업 없음, EPERM 만).
+    private static func checkFDA() -> Bool {
+        let p = NSString(string: "~/Library/Application Support/com.apple.TCC/TCC.db").expandingTildeInPath
+        guard let h = FileHandle(forReadingAtPath: p) else { return false }
+        try? h.close()
+        return true
     }
 }
 

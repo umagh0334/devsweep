@@ -50,6 +50,11 @@ final class Engine {
         return d > 0 ? ["--older-than=\(d)d"] : []
     }
 
+    /// TCC 보호 폴더(데스크탑·문서·다운로드) 포함 인자 — 기본 제외(macOS 권한 팝업 방지), 토글 시 포함.
+    private var protectedArgs: [String] {
+        UserDefaults.standard.bool(forKey: "scanProtectedFolders") ? ["--include-protected"] : []
+    }
+
     /// 에러 배너용 표시 언어 — 사용자가 앱에서 고른 언어, 없으면 시스템 추정 (DevSweepApp.lang 과 동일 규칙).
     private var uiLang: AppLanguage {
         AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .systemDefault
@@ -209,7 +214,7 @@ final class Engine {
         defer { isScanningProjects = false }
         guard let path = enginePath else { errorMessage = tr("err.engineMissing", uiLang); return }
         do {
-            let out = try await run([path, "scan-projects", root])
+            let out = try await run([path, "scan-projects", root] + protectedArgs)
             var dirs = try JSONDecoder().decode([ProjectDir].self, from: Data(out.utf8))
             dirs.sort { $0.sizeKB > $1.sizeKB }
             projectDirs = dirs
@@ -299,12 +304,9 @@ final class Engine {
         defer { isScanningSecrets = false }
         guard let path = enginePath else { errorMessage = tr("err.engineMissing", uiLang); return }
         do {
-            let out = try await run([path, "scan-secrets", root])
-            var found = try JSONDecoder().decode([SecretFinding].self, from: Data(out.utf8))
-            found.sort { $0.risk.severity != $1.risk.severity
-                            ? $0.risk.severity > $1.risk.severity        // 위험도 높은 순
-                            : $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-            secretFindings = found
+            let out = try await run([path, "scan-secrets", root] + protectedArgs)
+            secretFindings = try JSONDecoder().decode([SecretFinding].self, from: Data(out.utf8))
+            resortSecretFindings()
             secretScanRoot = root
         } catch {
             errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
@@ -339,18 +341,65 @@ final class Engine {
                 secretFindings[i].git = "ignored"
                 secretFindings[i].risk = .low
                 secretFindings[i].reason = "protected"
-                secretFindings.sort { $0.risk.severity != $1.risk.severity
-                                        ? $0.risk.severity > $1.risk.severity
-                                        : $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+                resortSecretFindings()
             }
         } catch {
             errorMessage = tr("sec.errGitignore", uiLang, error.localizedDescription)
         }
     }
 
+    /// 권한 느슨한 개인키를 chmod 600 으로 조인다(소유자만 접근). 내용/위치는 안 건드림 — 되돌리려면 chmod 한 줄.
+    /// 성공 시 로컬 항목 갱신: 권한 문제만 있던 키(medium)는 low 로 강등, untracked 키는 high 유지(git 문제 잔존).
+    func fixPermissions(_ finding: SecretFinding) {
+        do {
+            try FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                  ofItemAtPath: finding.path)
+            if let i = secretFindings.firstIndex(where: { $0.id == finding.id }) {
+                secretFindings[i].perm = "600"
+                if secretFindings[i].reason == "perm" {       // 권한이 유일한 문제였던 경우
+                    secretFindings[i].risk = .low
+                    secretFindings[i].reason = "permFixed"
+                }
+                resortSecretFindings()
+            }
+        } catch {
+            errorMessage = tr("sec.errChmod", uiLang, error.localizedDescription)
+        }
+    }
+
     /// Finder 에서 해당 파일을 선택 상태로 연다(파일을 열지 않고 위치만 보여줌 — 안전).
     func revealInFinder(_ path: String) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    /// 보안 항목 선택 토글 — 일괄 조치 체크박스용 (fixable 행만 UI 에 노출됨).
+    func setSecretSelected(_ id: String, _ value: Bool) {
+        if let i = secretFindings.firstIndex(where: { $0.id == id }) { secretFindings[i].selected = value }
+    }
+    func setAllSecretsSelected(_ value: Bool) {
+        for i in secretFindings.indices where secretFindings[i].fixable { secretFindings[i].selected = value }
+    }
+
+    /// 선택된 수정 가능 항목 일괄 조치 — untracked→.gitignore 추가, 권한 느슨 키→chmod 600(둘 다면 둘 다).
+    /// 조치마다 목록이 재정렬되므로 id 스냅숏으로 돌고, 매번 최신 상태를 다시 조회한다.
+    func fixSelectedSecrets() async {
+        let ids = secretFindings.filter { $0.fixable && $0.selected }.map(\.id)
+        for id in ids {
+            if let f = secretFindings.first(where: { $0.id == id }), f.git == "untracked" {
+                await addToGitignore(f)
+            }
+            if let f = secretFindings.first(where: { $0.id == id }),
+               f.kind == .key, f.perm.count >= 2, !f.perm.hasSuffix("00") {
+                fixPermissions(f)
+            }
+        }
+    }
+
+    /// 보안 목록 정렬 — 위험도 내림차순, 동률은 경로순 (scanSecrets/조치 후 공통).
+    private func resortSecretFindings() {
+        secretFindings.sort { $0.risk.severity != $1.risk.severity
+                                ? $0.risk.severity > $1.risk.severity
+                                : $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
     /// URL 을 base 아래 상대경로로. base 밖이면 파일명만 반환(방어).
@@ -510,9 +559,15 @@ struct SecretFinding: Identifiable, Decodable, Equatable {
     let name: String
     let kind: SecretKind
     var risk: SecretRisk
-    var reason: String     // tracked|untracked|perm|info|protected — UI 설명 문구 키
+    var reason: String     // tracked|untracked|perm|info|protected|permFixed — UI 설명 문구 키
     var git: String        // tracked|untracked|ignored|norepo
-    let perm: String
+    var perm: String       // 8진수 3자리 (조치 후 "600" 으로 갱신)
+    var selected: Bool = true          // JSON 에 없음 → 기본 선택 (fixable 행만 UI 에 체크박스 노출)
+    /// 자동 조치 가능 여부 — untracked(→gitignore 추가) 또는 권한 느슨 개인키(→chmod 600).
+    /// tracked(심각)는 gitignore 로 히스토리가 안 지워져 자동수정이 거짓 안심이 되므로 제외, low 는 고칠 게 없음.
+    var fixable: Bool {
+        git == "untracked" || (kind == .key && perm.count >= 2 && !perm.hasSuffix("00"))
+    }
     var id: String { path }
     enum CodingKeys: String, CodingKey { case path, name, kind, risk, reason, git, perm }
 }
