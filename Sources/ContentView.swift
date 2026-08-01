@@ -879,19 +879,40 @@ struct ContentView: View {
             Spacer(minLength: 6)
             diskGauge
             HStack(spacing: 14) { cacheCard; projectsCard; securityCard }
-            // 추천 정리 — 메뉴바와 동일 플로우 재사용(캐시 탭 전환→추천셋 선택→확인창)
-            Button {
-                appState.requestCleanRecommended = true
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "sparkles")
-                    Text(tr("home.startRecommended", lang))
-                        .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+            HStack(spacing: 10) {
+                // 한 번에 스캔 — 세 모드를 동시에 돌려 대시보드 전체를 채운다 (각 엔진 가드가 중복 실행 차단)
+                Button {
+                    Task {
+                        async let a: Void = engine.scan()
+                        async let b: Void = engine.scanProjects(root: "~")
+                        async let c: Void = engine.scanSecrets(root: "~")
+                        _ = await (a, b, c)
+                        loadDiskStats()
+                    }
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "magnifyingglass")
+                        Text(tr("home.scanAll", lang))
+                            .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 3)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 3)
+                .buttonStyle(.bordered).controlSize(.large)
+                .disabled(engine.isScanning || engine.isScanningProjects || engine.isScanningSecrets)
+                // 추천 정리 — 메뉴바와 동일 플로우 재사용(캐시 탭 전환→추천셋 선택→확인창)
+                Button {
+                    appState.requestCleanRecommended = true
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "sparkles")
+                        Text(tr("home.startRecommended", lang))
+                            .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 3)
+                }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                .disabled(totalKB == 0)
             }
-            .buttonStyle(.borderedProminent).controlSize(.large)
-            .disabled(totalKB == 0)
             Spacer()
         }
         .padding(.horizontal, 30).padding(.top, 10)
@@ -956,8 +977,32 @@ struct ContentView: View {
                  value: engine.isScanning ? tr("home.scanning", lang) : humanKB(totalKB),
                  caption: tr("recoverable", lang),
                  go: tr("home.go", lang),
-                 action: { appMode = 1 }) {
-            Icons.view("broom", size: 15).foregroundStyle(Theme.sweep)
+                 action: { appMode = 1 },
+                 icon: { Icons.view("broom", size: 15).foregroundStyle(Theme.sweep) }) {
+            // 용량 톱3 카테고리 + 상대크기 미니바 — "어디가 먹고 있는지"
+            if engine.isScanning || ranked.isEmpty {
+                Text(tr("home.scanHint", lang)).font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            } else {
+                let top = Array(ranked.prefix(3))
+                let maxKB = max(top.first?.sizeKB ?? 1, 1)
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(top) { c in
+                        HStack(spacing: 6) {
+                            Text(c.name).font(.system(size: 11, weight: .medium, design: .rounded))
+                                .lineLimit(1).frame(width: 72, alignment: .leading)
+                            Capsule().fill(Theme.sweep.opacity(0.72))
+                                .frame(width: max(6, 56 * CGFloat(c.sizeKB) / CGFloat(maxKB)), height: 5)
+                            Spacer(minLength: 4)
+                            Text(humanKB(c.sizeKB))
+                                .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if ranked.count > 3 {
+                        Text(tr("home.moreFmt", lang, ranked.count - 3))
+                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                }
+            }
         }
     }
     private var projectsCard: some View {
@@ -970,8 +1015,29 @@ struct ContentView: View {
                  caption: scanned ? tr("home.foldersFmt", lang, engine.projectDirs.count)
                                   : tr("home.projCaption", lang),
                  go: tr("home.go", lang),
-                 action: { appMode = 2 }) {
-            Image(systemName: "folder.fill").font(.system(size: 13)).foregroundStyle(Theme.heavy)
+                 action: { appMode = 2 },
+                 icon: { Image(systemName: "folder.fill").font(.system(size: 13)).foregroundStyle(Theme.heavy) }) {
+            // 제일 무거운 폴더 톱3 (경로 축약 + 용량)
+            if engine.isScanningProjects || engine.projectDirs.isEmpty {
+                Text(tr("home.scanHint", lang)).font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(Array(engine.projectDirs.prefix(3))) { d in
+                        HStack(spacing: 6) {
+                            Text(projDisplay(d.path))
+                                .font(.system(size: 10, design: .monospaced))
+                                .lineLimit(1).truncationMode(.middle)
+                            Spacer(minLength: 4)
+                            Text(humanKB(d.sizeKB))
+                                .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if engine.projectDirs.count > 3 {
+                        Text(tr("home.moreFmt", lang, engine.projectDirs.count - 3))
+                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    }
+                }
+            }
         }
     }
     private var securityCard: some View {
@@ -985,13 +1051,33 @@ struct ContentView: View {
                         : risks > 0 ? tr("home.riskFmt", lang, risks) : tr("home.riskNone", lang),
                  caption: tr("home.secCaption", lang),
                  go: tr("home.go", lang),
-                 action: { appMode = 3 }) {
-            Image(systemName: "lock.shield.fill").font(.system(size: 13)).foregroundStyle(tint)
+                 action: { appMode = 3 },
+                 icon: { Image(systemName: "lock.shield.fill").font(.system(size: 13)).foregroundStyle(tint) }) {
+            // 위험도 분해(심각/높음/보통/낮음, 0건은 생략) — 총합만 보면 막막하니 급한 순으로 쪼개 보여줌
+            if engine.isScanningSecrets || !scanned {
+                Text(tr("home.scanHint", lang)).font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach([SecretRisk.critical, .high, .medium, .low], id: \.rawValue) { r in
+                        let n = riskCount(r)
+                        if n > 0 {
+                            HStack(spacing: 6) {
+                                Circle().fill(riskColor(r)).frame(width: 7, height: 7)
+                                Text(riskLabel(r)).font(.system(size: 11, weight: .medium))
+                                Spacer(minLength: 4)
+                                Text("\(n)")
+                                    .font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
     /// 홈 카드 1장 — 전체가 버튼(해당 탭 이동), 호버 시 틴트 테두리 + 살짝 떠오름.
-    private struct HomeCard<Icon: View>: View {
+    /// detail = 카드 중앙의 톱3 미리보기(캐시 카테고리·프로젝트 폴더·위험도 분해) — 빈 공간을 정보로 채운다.
+    private struct HomeCard<Icon: View, Detail: View>: View {
         let tint: Color
         let title: String
         let value: String
@@ -999,6 +1085,7 @@ struct ContentView: View {
         let go: String
         let action: () -> Void
         @ViewBuilder let icon: () -> Icon
+        @ViewBuilder let detail: () -> Detail
         @State private var hovering = false
 
         var body: some View {
@@ -1012,6 +1099,9 @@ struct ContentView: View {
                         Text(title).font(.system(size: 13, weight: .semibold, design: .rounded))
                         Spacer()
                     }
+                    detail()
+                        .padding(.top, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 2)
                     Text(value)
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
@@ -1030,7 +1120,7 @@ struct ContentView: View {
                     }
                 }
                 .padding(14)
-                .frame(maxWidth: .infinity, minHeight: 128, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 300, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 12)
                     .fill(Color.primary.opacity(hovering ? 0.07 : 0.045)))
                 .overlay(RoundedRectangle(cornerRadius: 12)
