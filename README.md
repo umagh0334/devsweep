@@ -31,15 +31,15 @@ Ships as both a **CLI** (`devsweep`, a single bash script) and a **native macOS 
 - `--older-than=Nd` age filter · protect list via config file
 
 **macOS app**
-- **Home dashboard** — disk gauge with the reclaimable slice highlighted, per-mode summary cards with top-3 previews, and a one-click scan-everything button
+- **Home dashboard** — time-of-day greeting with your name, lifetime reclaimed stats and a dev-persona profile chip, plus a disk gauge with the reclaimable slice highlighted, per-mode summary cards with top-3 previews, and a one-click scan-everything button
 - **Cache mode** — master–detail UI, risk-tiered badges (safe / mid / caution), recommended selection, size/name sort, and a live cleaning-progress window
 - **Project scanner** — finds scattered `node_modules` / `target` / `.next` / `Pods` … with size and last-used age, plus a 30d+ unused filter
-- **Security check** — flags exposed `.env` files, private keys and credentials with git-aware risk levels (committed = critical, not gitignored = high). Report-only: never reads contents, never deletes. One-click `.gitignore` / `chmod 600` fixes — single or batch
+- **Security check** — flags exposed secrets with git-aware risk levels (committed = critical, not gitignored = high): `.env` files, SSH/TLS private keys, kubeconfig, Docker / GitHub CLI / gcloud credentials, DB passwords (`.pgpass`, `.my.cnf`), Apple `AuthKey` keys and more. Also warns on stale credentials (180 d+) and loose `~/.ssh` permissions. Report-only: never reads contents, never deletes. One-click `.gitignore` / `chmod` fixes — single or batch
 - **Trash or permanent delete** — recoverable by default, with "empty just-trashed items" in one click
 - **Menu bar & background mode** — status item with reclaimable size, hide-Dock option, launch at login
 - **Signed auto-update** — Ed25519-verified releases, checked automatically once a day
 - **Scheduled auto-clean** — daily / weekly / monthly via launchd; stateful tools like Docker are excluded from the automatic pass on purpose
-- **Prompt-free scanning** — TCC-protected folders (Desktop/Documents/Downloads) are skipped by default to avoid macOS permission dialogs; opt-in toggle + Full Disk Access onboarding in settings
+- **Prompt-free scanning** — TCC-protected folders (Desktop/Documents/Downloads) are skipped by default and media libraries (Music/Pictures/Movies) always, so macOS permission dialogs never pop up; opt-in toggle + Full Disk Access onboarding in settings
 - **Protect list · age filter · done notifications · custom confirmation modal**
 - **15 languages** — auto-detected from your system locale, switchable in settings
 
