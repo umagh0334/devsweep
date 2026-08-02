@@ -20,6 +20,8 @@ Ships as both a **CLI** (`devsweep`, a single bash script) and a **native macOS 
 
 > The heavy lifting (measuring, deleting) is done by the OS and each tool; DevSweep only decides *where*, *safely*, and *clearly*. That's why a single bash script is enough for the engine.
 
+> 🛡 **Privacy** — This app never reads the contents of sensitive files and never sends any data anywhere, under any circumstances. All scans and checks happen entirely on this Mac. (The network is used only to check for and download updates from GitHub — and even that can be turned off in settings.)
+
 ---
 
 ## Features
@@ -87,14 +89,9 @@ ln -s "$PWD/devsweep" ~/.local/bin/devsweep
 
 ## Build
 
-**Requires** Xcode Command Line Tools (`swiftc`). Full Xcode is **not** needed.
+The build script is not included in the repository — grab the ready-made app from [Releases](https://github.com/umagh0334/devsweep/releases).
 
-```bash
-./build.sh
-open DevSweep.app
-```
-
-`build.sh` compiles `Sources/*.swift` with `swiftc`, bundles `Info.plist` + the verified `devsweep` engine + icons, generates `.lproj` folders for 15 locales, and ad-hoc signs the app. Builds a **universal binary** (Apple Silicon + Intel) for macOS 14+.
+Rolling your own is straightforward: compile `Sources/*.swift` with `swiftc` (Xcode Command Line Tools; full Xcode not needed), bundle `Resources/Info.plist`, the `devsweep` engine and icons into an `.app`, and ad-hoc code-sign it. Targets macOS 14+, **universal binary** (Apple Silicon + Intel).
 
 ---
 
@@ -103,7 +100,6 @@ open DevSweep.app
 ```
 devsweep/
 ├── devsweep               # CLI engine (bash) — fully standalone
-├── build.sh               # swiftc → DevSweep.app bundle
 ├── Sources/               # SwiftUI app
 │   ├── DevSweepApp.swift  #  @main entry
 │   ├── Engine.swift       #  @Observable — drives the devsweep subprocess + JSON
@@ -145,6 +141,23 @@ Then double-click as usual. You only need this once per download — the in-app 
 > Seeing *"DevSweep is damaged and can't be opened"*? Same Gatekeeper block — the `xattr` command above clears it.
 
 For open-on-double-click distribution to everyone, the app would need an Apple Developer ID signature + notarization (paid).
+
+---
+
+## Roadmap
+
+**Shipped**
+- ✅ Protect list · age filter (`--older-than`) · scheduled auto-clean (launchd)
+- ✅ 44 cache categories · project folder scanner · security check with single & batch fixes
+- ✅ Trash mode · menu bar & background mode · personalized home dashboard
+- ✅ Ed25519-signed auto-update · 15 languages
+
+**Planned**
+- Cleanup history — "when / what / how much"
+- Deeper secret scanning — shell & git history (likely via gitleaks integration)
+- Custom user-defined categories
+- More accurate reclaimed-space measurement
+- Developer ID signing & notarization (no more Gatekeeper hoops)
 
 ---
 

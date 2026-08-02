@@ -20,6 +20,8 @@
 
 > 真正費工的部分（量測、刪除）由作業系統和各個工具負責；DevSweep 只決定*在哪裡*、*如何安全地*、*清楚地*進行。這就是為什麼單一 bash 腳本就足以作為引擎。
 
+> 🛡 **隱私** — 本應用程式在任何情況下都不會讀取敏感資訊的內容，也不會向外部傳送任何資料。所有掃描與檢查都只在這台 Mac 上進行。（網路僅用於從 GitHub 檢查與下載更新，且此功能也可在設定中關閉。）
+
 ---
 
 ## 功能特色
@@ -87,14 +89,9 @@ ln -s "$PWD/devsweep" ~/.local/bin/devsweep
 
 ## 建置
 
-**需要** Xcode Command Line Tools（`swiftc`）。不需要完整的 Xcode。
+建置腳本不包含在儲存庫中——請從 [Releases](https://github.com/umagh0334/devsweep/releases) 取得成品應用程式。
 
-```bash
-./build.sh
-open DevSweep.app
-```
-
-`build.sh` 使用 `swiftc` 編譯 `Sources/*.swift`，將 `Info.plist`、已驗證的 `devsweep` 引擎和圖示打包，為 15 種語言地區產生 `.lproj` 資料夾，並以 ad-hoc 方式簽署應用程式。建置為 **universal binary**（Apple Silicon + Intel），支援 macOS 14+。
+自行建置也不難：用 `swiftc`（Xcode Command Line Tools，無需完整 Xcode）編譯 `Sources/*.swift`，將 `Resources/Info.plist`、`devsweep` 引擎與圖示打包為 `.app`，再以 ad-hoc 方式簽署即可。macOS 14+，**universal binary**（Apple Silicon + Intel）。
 
 ---
 
@@ -103,7 +100,6 @@ open DevSweep.app
 ```
 devsweep/
 ├── devsweep               # CLI 引擎（bash）— 完全獨立
-├── build.sh               # swiftc → DevSweep.app 套件
 ├── Sources/               # SwiftUI 應用程式
 │   ├── DevSweepApp.swift  #  @main 進入點
 │   ├── Engine.swift       #  @Observable — 驅動 devsweep 子程序 + JSON
@@ -145,6 +141,23 @@ xattr -dr com.apple.quarantine /路徑/DevSweep.app
 > 看到 *「DevSweep 已損毀，無法打開」*？這同樣是 Gatekeeper 攔截 —— 用上面的 `xattr` 指令即可解除。
 
 若要讓任何人下載後雙擊即可開啟，應用程式需要 Apple Developer ID 簽署 + 公證（付費）。
+
+---
+
+## 路線圖
+
+**已完成**
+- ✅ 保護清單 · 時間篩選（`--older-than`）· 排程自動清理（launchd）
+- ✅ 44 個快取類別 · 專案資料夾掃描器 · 安全檢查（單筆/批次修正）
+- ✅ 垃圾桶模式 · 選單列與背景模式 · 個人化主頁儀表板
+- ✅ Ed25519 簽章自動更新 · 15 種語言
+
+**規劃中**
+- 清理歷史——「何時 / 清了什麼 / 釋放多少」
+- 更深入的密鑰掃描——shell 與 git 歷史（考慮整合 gitleaks）
+- 使用者自訂類別
+- 更精確的回收空間量測
+- Developer ID 簽章與公證（告別 Gatekeeper 麻煩）
 
 ---
 

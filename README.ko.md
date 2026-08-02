@@ -20,6 +20,8 @@
 
 > 실제 무거운 작업(크기 측정, 삭제)은 OS와 각 도구가 처리합니다. DevSweep은 *어디를*, *안전하게*, *명확하게* 결정하는 역할만 합니다. 엔진으로 단일 bash 스크립트만으로 충분한 이유가 여기 있습니다.
 
+> 🛡 **프라이버시** — 이 앱은 어떠한 경우에도 민감정보의 내용을 직접 읽거나 데이터를 외부로 전송하지 않습니다. 모든 스캔과 점검은 이 Mac 안에서만 이루어집니다. (네트워크는 GitHub 업데이트 확인·다운로드에만 사용되며, 이것도 설정에서 끌 수 있습니다.)
+
 ---
 
 ## 기능
@@ -87,14 +89,9 @@ ln -s "$PWD/devsweep" ~/.local/bin/devsweep
 
 ## 빌드
 
-**필수 사항** Xcode Command Line Tools(`swiftc`). 전체 Xcode는 **불필요**합니다.
+빌드 스크립트는 저장소에 포함되지 않습니다 — 완성된 앱은 [Releases](https://github.com/umagh0334/devsweep/releases)에서 받으세요.
 
-```bash
-./build.sh
-open DevSweep.app
-```
-
-`build.sh`는 `swiftc`로 `Sources/*.swift`를 컴파일하고, `Info.plist`와 검증된 `devsweep` 엔진, 아이콘을 번들로 묶습니다. 15개 로케일용 `.lproj` 폴더를 생성하고 앱을 ad-hoc 서명합니다. **universal binary**(Apple Silicon + Intel)로 빌드되어 macOS 14 이상을 지원합니다.
+직접 빌드하는 것도 어렵지 않습니다: `swiftc`(Xcode Command Line Tools, 전체 Xcode 불필요)로 `Sources/*.swift`를 컴파일하고, `Resources/Info.plist`·`devsweep` 엔진·아이콘을 `.app` 번들로 묶은 뒤 ad-hoc 서명하면 됩니다. macOS 14+, **universal binary**(Apple Silicon + Intel).
 
 ---
 
@@ -103,7 +100,6 @@ open DevSweep.app
 ```
 devsweep/
 ├── devsweep               # CLI 엔진 (bash) — 완전 독립 실행
-├── build.sh               # swiftc → DevSweep.app 번들 생성
 ├── Sources/               # SwiftUI 앱
 │   ├── DevSweepApp.swift  #  @main 진입점
 │   ├── Engine.swift       #  @Observable — devsweep 서브프로세스 및 JSON 처리
@@ -145,6 +141,23 @@ xattr -dr com.apple.quarantine /경로/DevSweep.app
 > *"DevSweep이(가) 손상되었기 때문에 열 수 없습니다"* 가 떠도 같은 Gatekeeper 차단입니다 — 위 `xattr` 명령으로 해결됩니다.
 
 받자마자 더블클릭으로 열리는 배포를 원하면 Apple Developer ID 서명 + 공증(유료)이 필요합니다.
+
+---
+
+## 로드맵
+
+**완료**
+- ✅ 보호 목록 · 나이 필터(`--older-than`) · 예약 자동 정리(launchd)
+- ✅ 캐시 카테고리 44종 · 프로젝트 폴더 스캐너 · 보안 점검(개별/일괄 조치)
+- ✅ 휴지통 모드 · 메뉴바 & 백그라운드 모드 · 개인화 홈 대시보드
+- ✅ Ed25519 서명 자동 업데이트 · 15개 언어
+
+**지원 예정**
+- 정리 히스토리 — "언제 / 뭘 / 얼마나"
+- 더 깊은 시크릿 스캔 — 쉘·git 히스토리 (gitleaks 연동 검토)
+- 사용자 정의 카테고리
+- 회수 용량 측정 정밀화
+- Developer ID 서명·공증 (Gatekeeper 우회 절차 제거)
 
 ---
 

@@ -681,25 +681,6 @@ struct AboutSettings: View {
     @State private var installer = Updater()
     @Environment(AppState.self) private var appState
 
-    /// 번역 크레딧 (이스터에그 — 가상의 현지 번역가들). ISO 639 코드순.
-    private static let credits: [(lang: String, name: String, nick: String)] = [
-        ("Deutsch",          "Lukas Bergmann",  "Kartoffelkönig"),
-        ("English",          "James Whitaker",  "nullpointer_jim"),
-        ("Español",          "Diego Hernández", "ElDiego10"),
-        ("Français",         "Camille Laurent", "RageQuitCam"),
-        ("Hrvatski",         "Ivan Horvat",     "ivke"),
-        ("Bahasa Indonesia", "Budi Santoso",    "wkwkwk_budi"),
-        ("Italiano",         "Marco Ricci",     "mannaggiaMarco"),
-        ("日本語",            "佐藤健太",          "けんちゃん"),
-        ("한국어",            "김민준",            "갓민준"),
-        ("Polski",           "Piotr Nowak",     "JanuszDev"),
-        ("Português",        "João Silva",      "joãozinho"),
-        ("ไทย",              "สมชาย ใจดี",        "somchai555"),
-        ("Tiếng Việt",       "Nguyễn Văn An",   "An đẹp trai"),
-        ("简体中文",          "王伟",              "老王"),
-        ("繁體中文",          "陳怡君",            "珍奶控"),
-    ]
-
     var body: some View {
         Form {
             Section {
@@ -732,29 +713,14 @@ struct AboutSettings: View {
                     Link("\(AppInfo.repoOwner)/\(AppInfo.repoName)", destination: AppInfo.repoURL)
                 }
             }
-            // 번역 크레딧 (이스터에그) — 고정 높이 스크롤 영역
-            Section(tr("about.translators", lang)) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 5) {
-                        ForEach(Self.credits.indices, id: \.self) { i in
-                            let c = Self.credits[i]
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Text(c.lang)
-                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 104, alignment: .leading)
-                                Text(c.name).font(.system(size: 10, weight: .medium))
-                                Text("(\(c.nick))")
-                                    .font(.system(size: 10, design: .rounded))
-                                    .foregroundStyle(Theme.sweep)
-                                Spacer(minLength: 0)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 2)
+            // 프라이버시 서약 — 민감정보 미열람·무전송 명문화 (보안 기능 신뢰의 근거)
+            Section {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "lock.shield.fill").foregroundStyle(Theme.sweep)
+                    Text(tr("about.privacy", lang))
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(height: 94)
             }
         }
         .formStyle(.grouped)
