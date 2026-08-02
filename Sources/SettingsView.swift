@@ -25,9 +25,14 @@ struct SettingsView: View {
                 NSApp.windows.first(where: { $0.title == tr("window.settings", .systemDefault) })?.center()
             }
             if appState.requestUpdateCheck { section = .about }   // 메뉴로 열렸으면 정보 탭
+            if appState.requestProfileTab { section = .developer; appState.requestProfileTab = false }
         }
         .onChange(of: appState.requestUpdateCheck) { _, req in
             if req { section = .about }   // 이미 열려 있던 설정창도 정보 탭으로 전환
+        }
+        .onChange(of: appState.requestProfileTab) { _, req in
+            // 홈 프로필 칩 → '내 프로필' 탭 (이미 열려 있던 설정창도 전환)
+            if req { section = .developer; appState.requestProfileTab = false }
         }
     }
 
@@ -106,11 +111,21 @@ struct GeneralSettings: View {
     @AppStorage("dockHidden") private var dockHidden = false
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
+    @AppStorage("displayName") private var displayName = ""   // 홈 인사말 이름(빈값=시스템 이름)
     @State private var fdaGranted = false   // 전체 디스크 접근 상태 (시스템 설정에서만 변경 가능)
 
     var body: some View {
         Form {
             Section {
+                // 홈 인사말 표시 이름 — 비우면 macOS 계정 이름(NSFullUserName) 사용
+                LabeledContent {
+                    TextField("", text: $displayName, prompt: Text(NSFullUserName()))
+                        .textFieldStyle(.roundedBorder).frame(width: 180)
+                        .multilineTextAlignment(.trailing)
+                } label: {
+                    Text(tr("general.displayName", lang))
+                    Text(tr("general.displayNameDesc", lang))
+                }
                 LabeledContent(tr("general.language", lang)) {
                     Picker("", selection: $languageRaw) {
                         Text(tr("general.system", lang)).tag("")

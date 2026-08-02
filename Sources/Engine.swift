@@ -351,13 +351,17 @@ final class Engine {
     /// 권한 느슨한 개인키를 chmod 600 으로 조인다(소유자만 접근). 내용/위치는 안 건드림 — 되돌리려면 chmod 한 줄.
     /// 성공 시 로컬 항목 갱신: 권한 문제만 있던 키(medium)는 low 로 강등, untracked 키는 high 유지(git 문제 잔존).
     func fixPermissions(_ finding: SecretFinding) {
+        // 파일은 600(소유자 rw), 디렉터리(~/.ssh)는 700(탐색에 x 필요)
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: finding.path, isDirectory: &isDir)
+        let mode = isDir.boolValue ? 0o700 : 0o600
         do {
-            try FileManager.default.setAttributes([.posixPermissions: 0o600],
+            try FileManager.default.setAttributes([.posixPermissions: mode],
                                                   ofItemAtPath: finding.path)
             if let i = secretFindings.firstIndex(where: { $0.id == finding.id }) {
-                secretFindings[i].perm = "600"
-                if secretFindings[i].reason == "perm" {       // 권한이 유일한 문제였던 경우
-                    secretFindings[i].risk = .low
+                secretFindings[i].perm = isDir.boolValue ? "700" : "600"
+                if secretFindings[i].reason == "perm" || secretFindings[i].reason == "permdir" {
+                    secretFindings[i].risk = .low                 // 권한이 유일한 문제였던 경우
                     secretFindings[i].reason = "permFixed"
                 }
                 resortSecretFindings()
@@ -561,7 +565,8 @@ struct SecretFinding: Identifiable, Decodable, Equatable {
     var risk: SecretRisk
     var reason: String     // tracked|untracked|perm|info|protected|permFixed — UI 설명 문구 키
     var git: String        // tracked|untracked|ignored|norepo
-    var perm: String       // 8진수 3자리 (조치 후 "600" 으로 갱신)
+    var perm: String       // 8진수 3자리 (조치 후 "600"/"700" 으로 갱신)
+    let ageDays: Int       // mtime 기준 나이 — stale(오래된 크리덴셜) 사유 표시용
     var selected: Bool = true          // JSON 에 없음 → 기본 선택 (fixable 행만 UI 에 체크박스 노출)
     /// 자동 조치 가능 여부 — untracked(→gitignore 추가) 또는 권한 느슨 개인키(→chmod 600).
     /// tracked(심각)는 gitignore 로 히스토리가 안 지워져 자동수정이 거짓 안심이 되므로 제외, low 는 고칠 게 없음.
@@ -569,7 +574,8 @@ struct SecretFinding: Identifiable, Decodable, Equatable {
         git == "untracked" || (kind == .key && perm.count >= 2 && !perm.hasSuffix("00"))
     }
     var id: String { path }
-    enum CodingKeys: String, CodingKey { case path, name, kind, risk, reason, git, perm }
+    enum CodingKeys: String, CodingKey { case path, name, kind, risk, reason, git, perm
+                                         case ageDays = "age_days" }
 }
 
 /// 민감 파일 종류 — 아이콘/설명 분기용.

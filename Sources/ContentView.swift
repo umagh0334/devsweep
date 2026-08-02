@@ -387,10 +387,6 @@ struct ContentView: View {
                 Text(tr("footer.prompt", lang)).foregroundStyle(.secondary)
             }
             Spacer()
-            Button { openWindow(id: "settings") } label: {
-                Image(systemName: "gearshape").font(.system(size: 13))
-            }
-            .buttonStyle(.borderless).help(tr("footer.settings", lang))
             Button { Task { await engine.scan() } } label: {
                 HStack(spacing: 5) { Icons.view("refresh", size: 12); Text(tr("footer.rescan", lang)) }
             }
@@ -404,10 +400,13 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(selectedCount == 0 || engine.isCleaning || engine.isScanning)
+            // 옵션 진입 — 모든 탭 공통: 하단 최우측
+            Button { openWindow(id: "settings") } label: {
+                Image(systemName: "gearshape").font(.system(size: 13))
+            }
+            .buttonStyle(.borderless).help(tr("footer.settings", lang))
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(.regularMaterial)
-        .overlay(alignment: .top) { Divider() }
+        .bottomBarStyle()
     }
 
     // ── 커스텀 정리 확인 모달 (시스템 다이얼로그 대체) ──
@@ -624,9 +623,9 @@ struct ContentView: View {
                 }
             }
 
-            // 하단 액션바 (결과 있을 때)
-            if !filteredProjects.isEmpty {
-                HStack(spacing: 10) {
+            // 하단 액션바 — 항상 표시(옵션 진입은 캐시 탭처럼 하단 일관), 선택 컨트롤은 결과 있을 때만
+            HStack(spacing: 10) {
+                if !filteredProjects.isEmpty {
                     Button { engine.setAllProjectsSelected(!allOn) } label: {
                         HStack(spacing: 5) {
                             Image(systemName: allOn ? "checkmark.square.fill" : "square")
@@ -635,9 +634,13 @@ struct ContentView: View {
                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                         }
                     }.buttonStyle(.plain)
-                    Spacer()
+                }
+                Spacer()
+                if !filteredProjects.isEmpty {
                     Text("\(selectedProjects.count) / \(filteredProjects.count)")
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                }
+                if !filteredProjects.isEmpty {
                     Button {
                         let kb = selectedProjects.reduce(0) { $0 + $1.sizeKB }
                         cleanRequest = CleanRequest(targets: nil, title: "", count: selectedProjects.count,
@@ -648,9 +651,13 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(selectedProjects.isEmpty || engine.isCleaning)
                 }
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .background(.regularMaterial).overlay(alignment: .top) { Divider() }
+                // 옵션 진입 — 모든 탭 공통: 하단 최우측
+                Button { openWindow(id: "settings") } label: {
+                    Image(systemName: "gearshape").font(.system(size: 13))
+                }
+                .buttonStyle(.borderless).help(tr("footer.settings", lang))
             }
+            .bottomBarStyle()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -723,42 +730,51 @@ struct ContentView: View {
                 }
             }
 
-            if visibleFindings.contains(where: \.fixable) { securityActionBar }
+            // 요약 스트립(위) → 액션 바(최하단) — 캐시/프로젝트와 동일하게 '조치 바'가 바닥에 오도록
             securitySummaryBar
+            securityActionBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// 일괄 조치 바 — 수정 가능(fixable) 항목이 보일 때만. 프로젝트 하단 바와 동일 패턴.
+    /// 하단 액션 바 — 항상 표시(기어 상시 접근, 캐시/프로젝트와 동일 스타일). 조치 컨트롤은 수정 가능 항목이 있을 때만.
     private var securityActionBar: some View {
         let fixables = visibleFindings.filter(\.fixable)
         let picked = fixables.filter(\.selected)
         let allOn = !fixables.isEmpty && fixables.allSatisfy(\.selected)
         return HStack(spacing: 10) {
-            Button { engine.setAllSecretsSelected(!allOn) } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: allOn ? "checkmark.square.fill" : "square")
-                        .foregroundStyle(allOn ? AnyShapeStyle(Theme.sweep) : AnyShapeStyle(.secondary))
-                    Text(allOn ? tr("select.none", lang) : tr("select.all", lang))
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                }
-            }.buttonStyle(.plain)
-            Spacer()
-            Text("\(picked.count) / \(fixables.count)")
-                .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
-            Button {
-                Task { await engine.fixSelectedSecrets() }
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "wrench.and.screwdriver")
-                    Text(tr("sec.fixSelected", lang))
-                }
+            if !fixables.isEmpty {
+                Button { engine.setAllSecretsSelected(!allOn) } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: allOn ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(allOn ? AnyShapeStyle(Theme.sweep) : AnyShapeStyle(.secondary))
+                        Text(allOn ? tr("select.none", lang) : tr("select.all", lang))
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                    }
+                }.buttonStyle(.plain)
             }
-            .buttonStyle(.borderedProminent).controlSize(.small)
-            .disabled(picked.isEmpty)
+            Spacer()
+            if !fixables.isEmpty {
+                Text("\(picked.count) / \(fixables.count)")
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                Button {
+                    Task { await engine.fixSelectedSecrets() }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "wrench.and.screwdriver")
+                        Text(tr("sec.fixSelected", lang))
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(picked.isEmpty)
+            }
+            // 옵션 진입 — 모든 탭 공통: 하단 최우측
+            Button { openWindow(id: "settings") } label: {
+                Image(systemName: "gearshape").font(.system(size: 13))
+            }
+            .buttonStyle(.borderless).help(tr("footer.settings", lang))
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(.regularMaterial).overlay(alignment: .top) { Divider() }
+        .bottomBarStyle()
     }
 
     /// 민감 파일 1행 — 체크박스(수정 가능 행만) · 위험도 색 좌측바 · 종류 아이콘 · 파일명/경로 · 설명 · 조치 버튼.
@@ -820,7 +836,7 @@ struct ContentView: View {
             Spacer()
             Text(tr("sec.footNote", lang)).font(.system(size: 10)).foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 16).padding(.vertical, 9)
+        .padding(.horizontal, 16).padding(.vertical, 7)
         .background(.regularMaterial).overlay(alignment: .top) { Divider() }
     }
 
@@ -864,7 +880,9 @@ struct ContentView: View {
         case "tracked":   return tr("sec.reason.tracked", lang)
         case "untracked": return tr("sec.reason.untracked", lang)
         case "perm":      return tr("sec.reason.perm", lang, f.perm)
-        case "permFixed": return tr("sec.reason.permFixed", lang)
+        case "permdir":   return tr("sec.reason.permDir", lang, f.perm)
+        case "stale":     return tr("sec.reason.stale", lang, f.ageDays)
+        case "permFixed": return tr("sec.reason.permFixed", lang, f.perm)
         case "protected": return tr("sec.reason.protected", lang)
         default:          return f.git == "ignored" ? tr("sec.reason.protected", lang) : tr("sec.reason.info", lang)
         }
@@ -875,9 +893,10 @@ struct ContentView: View {
     //   "네 디스크에서 이만큼은 내가 비워줄 수 있다"를 한 눈에 보여준다. 카드 3장 = 각 모드 요약+바로가기.
 
     private var homeView: some View {
-        VStack(spacing: 26) {
-            Spacer(minLength: 6)
+        VStack(spacing: 16) {
+            homeGreeting
             diskGauge
+            // 카드가 남는 세로 공간을 흡수(maxHeight .infinity) → 상·하단 여백이 안 생긴다
             HStack(spacing: 14) { cacheCard; projectsCard; securityCard }
             HStack(spacing: 10) {
                 // 한 번에 스캔 — 세 모드를 동시에 돌려 대시보드 전체를 채운다 (각 엔진 가드가 중복 실행 차단)
@@ -913,11 +932,91 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent).controlSize(.large)
                 .disabled(totalKB == 0)
             }
-            Spacer()
+            // 버튼은 중앙 유지, 기어만 하단 최우측 고정 (모든 탭 공통 위치)
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .trailing) {
+                Button { openWindow(id: "settings") } label: {
+                    Image(systemName: "gearshape").font(.system(size: 13))
+                }
+                .buttonStyle(.borderless).help(tr("footer.settings", lang))
+            }
         }
-        .padding(.horizontal, 30).padding(.top, 10)
+        .padding(.horizontal, 30).padding(.top, 14).padding(.bottom, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { loadDiskStats() }
+    }
+
+    // ── 홈 인사말 + 프로필 칩 ──
+
+    /// 인사말 이름 — 설정 '표시 이름' 우선, 비어 있으면 macOS 계정 전체 이름, 그것도 없으면 로그인 ID.
+    private var greetName: String {
+        let custom = (UserDefaults.standard.string(forKey: "displayName") ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        if !custom.isEmpty { return custom }
+        let full = NSFullUserName().trimmingCharacters(in: .whitespaces)
+        return full.isEmpty ? NSUserName() : full
+    }
+
+    /// 시간대별 인사 — 아침(5~11)/오후(11~17)/저녁(17~22)/밤.
+    private var greetingText: String {
+        let key: String
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<11:  key = "home.greetMorningFmt"
+        case 11..<17: key = "home.greetAfternoonFmt"
+        case 17..<22: key = "home.greetEveningFmt"
+        default:      key = "home.greetNightFmt"
+        }
+        return tr(key, lang, greetName)
+    }
+
+    /// 시즌 내 획득 배지 수 — 설정 '내 프로필'과 같은 저장소(badgeEarned JSON)를 읽는다.
+    private var earnedBadgeCount: Int {
+        let json = UserDefaults.standard.string(forKey: "badgeEarned") ?? "{}"
+        guard let d = json.data(using: .utf8),
+              let m = try? JSONDecoder().decode([String: Double].self, from: d) else { return 0 }
+        let period = UserDefaults.standard.object(forKey: "badgePeriodDays") as? Int ?? 30
+        return DevProfile.activeKeys(m, now: Date().timeIntervalSince1970, periodDays: period).count
+    }
+
+    private var homeGreeting: some View {
+        let totalReclaimed = UserDefaults.standard.integer(forKey: "totalReclaimedKB")
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("👋 " + greetingText)
+                    .font(.system(size: 19, weight: .bold, design: .rounded))
+                Text(totalReclaimed > 0 ? tr("home.statsFmt", lang, humanKB(totalReclaimed))
+                                        : tr("home.statsEmpty", lang))
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            profileChip
+        }
+    }
+
+    /// 프로필 칩 — 페르소나(캐시 분포 추정) + 획득 배지 수. 클릭 → 설정 '내 프로필' 탭.
+    private var profileChip: some View {
+        let p = DevProfile.analyze(engine.categories, lang: lang)
+        return Button {
+            appState.requestProfileTab = true
+            openWindow(id: "settings")
+        } label: {
+            HStack(spacing: 8) {
+                Text(p.emoji).font(.system(size: 20))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(p.title).font(.system(size: 12, weight: .semibold, design: .rounded))
+                    HStack(spacing: 3) {
+                        Text(tr("home.badgesFmt", lang, earnedBadgeCount))
+                        Image(systemName: "chevron.right").font(.system(size: 7, weight: .bold))
+                    }
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .onHover { if $0 { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() } }
     }
 
     private var diskGauge: some View {
@@ -1120,7 +1219,7 @@ struct ContentView: View {
                     }
                 }
                 .padding(14)
-                .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 300, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 200, maxHeight: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 12)
                     .fill(Color.primary.opacity(hovering ? 0.07 : 0.045)))
                 .overlay(RoundedRectangle(cornerRadius: 12)
@@ -1565,4 +1664,19 @@ struct PathRow: View {
             }
         }
     }
+}
+
+/// 하단 바 공통 스타일 — 캐시/프로젝트/보안 탭의 최하단 바를 같은 높이(minHeight 48)·경계선으로 통일해
+/// 탭을 전환해도 Divider 위치가 흔들리지 않게 한다 (탭별 패딩이 10/10/9 로 달라 미세하게 어긋나던 문제).
+private struct BottomBarStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(.regularMaterial)
+            .overlay(alignment: .top) { Divider() }
+    }
+}
+extension View {
+    fileprivate func bottomBarStyle() -> some View { modifier(BottomBarStyle()) }
 }

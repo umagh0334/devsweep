@@ -31,7 +31,9 @@ struct DevSweepApp: App {
     private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .systemDefault }
 
     var body: some Scene {
-        WindowGroup("DevSweep") {
+        // id 부여: AppKit(메뉴바)이 NSWindow.identifier 로 메인/설정 창을 구분하고,
+        // 창이 파괴됐을 때 openWindow(id:"main") 로 재생성할 수 있게 한다.
+        WindowGroup("DevSweep", id: "main") {
             ContentView(engine: engine)
                 .environment(\.appLanguage, lang)
                 .environment(appState)
@@ -85,6 +87,8 @@ private struct OpenSettingsButton: View {
     var requestUpdateCheck = false
     /// 메뉴바 "안전셋 정리…" 가 켜면, 메인 뷰가 추천셋 선택 후 확인창을 띄운다.
     var requestCleanRecommended = false
+    /// 홈 프로필 칩이 켜면, 설정창이 '내 프로필' 탭으로 전환한다.
+    var requestProfileTab = false
 }
 
 /// 앱 메뉴(About 아래) "업데이트 확인…" — 설정창 정보 탭을 열고 자동 체크를 건다.

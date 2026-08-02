@@ -787,6 +787,12 @@ PROT_PRUNE=()
 set_prot_prune() {
   local root="$1" d
   PROT_PRUNE=()
+  # 미디어 폴더(음악·사진·동영상)는 **항상** 제외 — 라이브러리 번들에 닿는 순간 Apple Music/사진
+  # TCC 팝업이 뜨고(ad-hoc 은 빌드마다 재요청), 개발 산출물이 있을 일도 없다. root 직접 지정 시만 예외.
+  for d in "$HOME/Music" "$HOME/Pictures" "$HOME/Movies"; do
+    case "$root" in "$d"|"$d"/*) continue ;; esac
+    PROT_PRUNE+=(-o -path "$d")
+  done
   [ "${INCLUDE_PROTECTED:-0}" = 1 ] && return 0
   for d in "$HOME/Desktop" "$HOME/Documents" "$HOME/Downloads"; do
     case "$root" in "$d"|"$d"/*) continue ;; esac
@@ -833,6 +839,14 @@ secret_kind() {
     *.pem|*.key|*.p12|*.pfx|*.keystore|*.jks) echo key ;;
     .npmrc|.pypirc|.netrc|.git-credentials)   echo cred ;;
     credentials) case "$full" in */.aws/credentials) echo cred ;; *) return 1 ;; esac ;;
+    .pgpass|.my.cnf)                      echo cred ;;                     # DB 접속 비밀번호
+    AuthKey_*.p8)                         echo key ;;                      # Apple 푸시/API 키
+    service-account*.json|serviceAccount*.json) echo cred ;;               # GCP 서비스 계정
+    application_default_credentials.json) echo cred ;;                     # gcloud ADC
+    hosts.yml)   case "$full" in */.config/gh/hosts.yml)  echo cred ;; *) return 1 ;; esac ;;  # gh OAuth 토큰
+    config.json) case "$full" in */.docker/config.json)   echo cred ;; *) return 1 ;; esac ;;  # 레지스트리 인증
+    config)      case "$full" in */.kube/config)          echo cred ;; *) return 1 ;; esac ;;  # 클러스터 토큰
+    credentials.db|access_tokens.db) case "$full" in */gcloud/*) echo cred ;; *) return 1 ;; esac ;;
     *.tfstate|*.tfstate.backup)           echo state ;;
     *) return 1 ;;
   esac
@@ -862,14 +876,31 @@ cmd_scan_secrets() {
   local root="${1:-$HOME}"
   root="${root/#\~/$HOME}"
   [ -d "$root" ] || { printf '[]\n'; return 0; }
-  local first=1 f base kind risk reason gitst perm go
+  local first=1 f base kind risk reason gitst perm go now mt age
+  now=$(date +%s)
   printf '['
+  # ~/.ssh 폴더 자체 권한 점검 — 700 아니면(타 유저 접근 가능) medium. 스캔 root 가 폴더를 포함할 때만.
+  local sshdir="$HOME/.ssh" dperm dgo
+  case "$sshdir" in
+    "$root"|"$root"/*)
+      if [ -d "$sshdir" ]; then
+        dperm=$(stat -f '%OLp' "$sshdir" 2>/dev/null || echo "")
+        dgo="${dperm: -2}"
+        if [ -n "$dperm" ] && [ "$dgo" != "00" ]; then
+          first=0
+          printf '{"path":"%s","name":".ssh","kind":"key","risk":"medium","reason":"permdir","git":"norepo","perm":"%s","age_days":0}' \
+            "$(json_escape "$sshdir")" "$dperm"
+        fi
+      fi ;;
+  esac
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     base=$(basename "$f")
     kind=$(secret_kind "$base" "$f") || continue     # 제외 대상(.env.example 등)이면 건너뜀
     gitst=$(git_leak_state "$f")
     perm=$(stat -f '%OLp' "$f" 2>/dev/null || echo "")
+    mt=$(stat -f %m "$f" 2>/dev/null || echo "$now")
+    age=$(( (now - mt) / 86400 )); [ "$age" -lt 0 ] && age=0
     # 위험도: git 노출 상태를 1차 기준으로
     risk=low; reason="info"
     case "$gitst" in
@@ -881,9 +912,13 @@ cmd_scan_secrets() {
       go="${perm: -2}"
       if [ "$go" != "00" ] && [ "$risk" = low ]; then risk=medium; reason="perm"; fi
     fi
+    # 오래된 키/크리덴셜(180일+) → 로테이션 권장. 다른 위험이 없을 때만(정보성 승격)
+    if [ "$risk" = low ] && { [ "$kind" = key ] || [ "$kind" = cred ]; } && [ "$age" -ge 180 ]; then
+      risk=medium; reason="stale"
+    fi
     [ "$first" -eq 1 ] && first=0 || printf ','
-    printf '{"path":"%s","name":"%s","kind":"%s","risk":"%s","reason":"%s","git":"%s","perm":"%s"}' \
-      "$(json_escape "$f")" "$(json_escape "$base")" "$kind" "$risk" "$reason" "$gitst" "$perm"
+    printf '{"path":"%s","name":"%s","kind":"%s","risk":"%s","reason":"%s","git":"%s","perm":"%s","age_days":%s}' \
+      "$(json_escape "$f")" "$(json_escape "$base")" "$kind" "$risk" "$reason" "$gitst" "$perm" "$age"
   done < <(set_prot_prune "$root"; find "$root" \
       \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \
          -o -path '*/node_modules/*' -o -path '*/vendor/*' -o -path '*/Pods/*' \
@@ -893,7 +928,12 @@ cmd_scan_secrets() {
                  -o -name '*.pem' -o -name '*.key' -o -name '*.p12' -o -name '*.pfx' \
                  -o -name '*.keystore' -o -name '*.jks' \
                  -o -name '.npmrc' -o -name '.pypirc' -o -name '.netrc' -o -name '.git-credentials' \
-                 -o -name 'credentials' -o -name '*.tfstate' -o -name '*.tfstate.backup' \) -print 2>/dev/null)
+                 -o -name 'credentials' -o -name '*.tfstate' -o -name '*.tfstate.backup' \
+                 -o -name '.pgpass' -o -name '.my.cnf' -o -name 'AuthKey_*.p8' \
+                 -o -name 'service-account*.json' -o -name 'serviceAccount*.json' \
+                 -o -name 'application_default_credentials.json' \
+                 -o -name 'hosts.yml' -o -name 'config.json' -o -name 'config' \
+                 -o -name 'credentials.db' -o -name 'access_tokens.db' \) -print 2>/dev/null)
   printf ']\n'
 }
 
