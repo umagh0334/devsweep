@@ -2,7 +2,9 @@
 
 [English](README.md) | **한국어** | [日本語](README.ja.md) | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md)
 
-개발 도구들이 슬그머니 쌓아놓은 기가바이트를 되찾아 오세요. `gradle` 빌드, `docker` pull, `npm install`… 할 때마다 캐시가 쌓입니다. DevSweep은 Mac 전체에서 **31개 카테고리**를 스캔해 삭제해도 안전한 항목을 찾아내고, 깔끔하게 비워줍니다. 이제 눈치게임은 그만.
+개발 도구들이 슬그머니 쌓아놓은 기가바이트를 되찾아 오세요. `gradle` 빌드, `docker` pull, `npm install`… 할 때마다 캐시가 쌓입니다. DevSweep은 Mac 전체에서 **44개 카테고리**를 스캔해 삭제해도 안전한 항목을 찾아내고, 깔끔하게 비워줍니다. 이제 눈치게임은 그만.
+
+캐시뿐이 아닙니다. 흩어진 **빌드/의존 폴더**(`node_modules`, `target`, …)를 찾아내는 프로젝트 스캐너와, 노출된 비밀정보(`.env`, 개인키, 크리덴셜)를 점검하는 **보안 모드**까지 — 전부 **홈 대시보드** 하나에서 시작합니다.
 
 **CLI**(`devsweep`, 단일 bash 스크립트)와 **네이티브 macOS 앱**(`DevSweep.app`, SwiftUI) 두 가지 형태로 제공됩니다. GUI는 동일한 검증된 엔진 위에 얹은 얇은 인터페이스입니다.
 
@@ -25,29 +27,33 @@
 **CLI**
 - 스캔, 드라이런 미리보기, 선택/전체 정리
 - `--json` / `detail` — GUI용 기계 가독 출력
+- `scan-projects` / `scan-secrets` — 프로젝트 폴더·민감 파일 스캐너
 - `--older-than=Nd` 나이 필터 · 설정 파일을 통한 보호 목록
 
 **macOS 앱**
-- **마스터-디테일 UI** — 카테고리 목록 + 카테고리별 상세 내역(경로, 실행 명령어, 재생성 비용, 안전도, Full Disk Access 안내)
-- **위험도 배지** — 삭제 전에 한눈에 파악하는 신호등 표시(안전 / 보통 / 주의)
+- **홈 대시보드** — 회수 가능 영역이 표시된 디스크 게이지, 모드별 요약 카드(톱3 미리보기), 한 번에 스캔 버튼
+- **캐시 모드** — 마스터-디테일 UI, 위험도 신호등 배지(안전/보통/주의), 추천 선택, 크기/이름 정렬, 실시간 정리 진행 창
+- **프로젝트 스캐너** — 흩어진 `node_modules` / `target` / `.next` / `Pods` … 를 용량·미사용 기간과 함께 발견, 30일+ 미사용 필터
+- **보안 점검** — 노출된 `.env`·개인키·크리덴셜을 git 인지 위험도로 판정(커밋됨=심각, gitignore 안 됨=높음). 리포트 전용: 내용을 읽지 않고 삭제도 안 함. `.gitignore` 추가/`chmod 600` 원클릭 조치 — 개별 또는 일괄
+- **휴지통/완전삭제 선택** — 기본은 복구 가능한 휴지통, "방금 옮긴 항목만 영구삭제" 원클릭 제공
+- **메뉴바 & 백그라운드 모드** — 회수 용량 표시 상태 아이콘, 독 숨기기, 로그인 시 시작
+- **서명된 자동 업데이트** — Ed25519 서명 검증을 거친 릴리스만 설치, 하루 한 번 자동 확인
 - **예약 자동 정리** — launchd를 이용한 일간 / 주간 / 월간 자동 실행. Docker처럼 상태가 있는 도구는 자동 실행 대상에서 의도적으로 제외됩니다.
-- **완료 알림** — 정리가 끝나면 확보된 용량과 함께 시스템 알림 전송
-- **보호 목록** — 수동, 예약, `all` 어느 방식으로도 절대 정리되지 않도록 캐시를 고정
-- **나이 필터** — N일보다 오래된 캐시만 정리
-- **전체 선택 토글** 및 삭제 전 **커스텀 확인 모달**
+- **권한 팝업 없는 스캔** — macOS 보호 폴더(데스크탑·문서·다운로드)는 기본 제외해 확인창이 뜨지 않음. 포함 토글 + 설정의 전체 디스크 접근 안내 제공
+- **보호 목록 · 나이 필터 · 완료 알림 · 커스텀 확인 모달**
 - **15개 언어** — 시스템 로케일에서 자동 감지, 설정에서 직접 변경 가능
 
 ---
 
-## 카테고리 (31개)
+## 카테고리 (44개)
 
-**Safe** (21개 — 기본 정리에 포함):
+**Safe** (26개 — 기본 정리에 포함):
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate` `electron` `ccache` `gem` `poetry` `carthage`
 
-**Heavy** (10개 — 재다운로드 비용이 크므로 명시적으로 지정하거나 `all` 사용 시만 정리):
+**Heavy** (18개 — 재다운로드 비용이 크므로 명시적으로 지정하거나 `all` 사용 시만 정리):
 
-`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex` `puppeteer` `cypress` `ollama` `lmstudio` `xcode-devsupport` `simruntime` `conda` `bazel`
 
 ---
 
@@ -66,6 +72,9 @@ devsweep --older-than=30d clean   # 30일보다 오래된 캐시만 정리
 # 기계 가독 출력 (GUI에서 사용)
 devsweep --json           # 전체 카테고리를 JSON 배열로 출력
 devsweep detail <cat>     # 특정 카테고리의 상세 정보를 JSON 객체로 출력
+devsweep scan-projects ~  # 흩어진 빌드/의존 폴더를 JSON으로 출력
+devsweep scan-secrets ~   # 노출된 민감 파일을 JSON으로 출력 (리포트 전용, 내용 안 읽음)
+                          # --include-protected 추가 시 데스크탑·문서·다운로드도 스캔
 ```
 
 어디서든 실행하려면 `PATH`에 심볼릭 링크를 추가하세요:

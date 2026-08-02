@@ -2,7 +2,9 @@
 
 [English](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-Hans.md) | **繁體中文**
 
-找回被開發工具鏈遺忘的那幾個 GB。每次 `gradle` 建置、`docker` 拉取、`npm install`，都會留下快取——DevSweep 掃描 Mac 上的 **31 個類別**，標示哪些可以安全刪除，然後一掃而空。不用猜，不用擔心。
+找回被開發工具鏈遺忘的那幾個 GB。每次 `gradle` 建置、`docker` 拉取、`npm install`，都會留下快取——DevSweep 掃描 Mac 上的 **44 個類別**，標示哪些可以安全刪除，然後一掃而空。不用猜，不用擔心。
+
+不只是快取：還有找出散落**建置/相依資料夾**（`node_modules`、`target` 等）的專案掃描器，以及檢查外洩敏感資訊（`.env`、私鑰、憑證）的**安全模式**——一切都從**主頁儀表板**開始。
 
 同時提供 **CLI** 版（`devsweep`，單一 bash 腳本）和**原生 macOS 應用程式**（`DevSweep.app`，SwiftUI）。GUI 只是同一套經過驗證的引擎之上的薄殼。
 
@@ -25,29 +27,33 @@
 **CLI**
 - 掃描、試跑預覽、選擇性或全面清理
 - `--json` / `detail` 機器可讀輸出，供 GUI 使用
+- `scan-projects` / `scan-secrets` — 專案資料夾與敏感檔案掃描器
 - `--older-than=Nd` 時間篩選 · 透過設定檔設定保護清單
 
 **macOS 應用程式**
-- **主從式介面** — 類別清單 + 每個類別的詳細資訊（路徑、實際指令、重新建置成本、安全等級、Full Disk Access 提示）
-- **風險等級標章** — 交通燈號式提示（安全 / 中等 / 謹慎），讓你在操作前心裡有數
+- **主頁儀表板** — 標示可回收空間的磁碟量表、各模式摘要卡片（前三預覽）、一鍵全部掃描
+- **快取模式** — 主從式介面、風險燈號標章（安全 / 中等 / 謹慎）、推薦選取、依大小/名稱排序、即時清理進度視窗
+- **專案掃描器** — 找出散落的 `node_modules` / `target` / `.next` / `Pods` … 並顯示大小與閒置時間，支援 30 天+ 未用篩選
+- **安全檢查** — 以 git 感知的風險等級標示外洩的 `.env`、私鑰與憑證（已提交=嚴重，未加入 gitignore=高）。僅回報：不讀取內容、不刪除。一鍵 `.gitignore` / `chmod 600` 修正——單筆或批次
+- **垃圾桶/永久刪除可選** — 預設移至可復原的垃圾桶，並可一鍵「僅清空本次移入項目」
+- **選單列與背景模式** — 顯示可回收空間的狀態圖示、隱藏 Dock 圖示、登入時啟動
+- **簽署自動更新** — 僅安裝通過 Ed25519 簽章驗證的版本，每天自動檢查一次
 - **排程自動清理** — 透過 launchd 設定每日 / 每週 / 每月；有狀態的工具（如 Docker）在自動清理時刻意排除在外
-- **完成通知** — 清理結束後發送系統通知，並顯示實際釋放的空間
-- **保護清單** — 固定不想被清理的快取（手動、排程或 `all` 模式均有效）
-- **時間篩選** — 只清除 N 天前的快取
-- **全選切換**，以及刪除前的**自訂確認視窗**
+- **無權限彈窗掃描** — 預設略過 macOS 保護資料夾（桌面/文件/下載）以避免權限彈窗；提供包含開關 + 設定中的完整磁碟取用權限引導
+- **保護清單 · 時間篩選 · 完成通知 · 自訂確認視窗**
 - **15 種語言** — 自動偵測系統語言，也可在設定中手動切換
 
 ---
 
-## 類別（31 個）
+## 類別（44 個）
 
-**安全**（21 個——預設清理範圍）：
+**安全**（26 個——預設清理範圍）：
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate` `electron` `ccache` `gem` `poetry` `carthage`
 
-**重量級**（10 個——重新下載成本高，僅在明確指定或使用 `all` 時才清除）：
+**重量級**（18 個——重新下載成本高，僅在明確指定或使用 `all` 時才清除）：
 
-`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex` `puppeteer` `cypress` `ollama` `lmstudio` `xcode-devsupport` `simruntime` `conda` `bazel`
 
 ---
 
@@ -66,6 +72,9 @@ devsweep --older-than=30d clean   # 只清除 30 天前的快取
 # 機器可讀輸出（供 GUI 使用）
 devsweep --json           # 所有類別輸出為 JSON 陣列
 devsweep detail <cat>     # 單一類別詳細資訊輸出為 JSON 物件
+devsweep scan-projects ~  # 散落的建置/相依資料夾輸出為 JSON
+devsweep scan-secrets ~   # 外洩的敏感檔案輸出為 JSON（僅回報，不讀取內容）
+                          # 加 --include-protected 可一併掃描桌面/文件/下載
 ```
 
 選用——建立符號連結到 `PATH`，讓你在任何目錄都能執行：

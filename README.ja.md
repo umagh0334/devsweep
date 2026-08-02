@@ -2,7 +2,9 @@
 
 [English](README.md) | [한국어](README.ko.md) | **日本語** | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md)
 
-開発ツールチェーンが放置したギガバイトを取り戻そう。`gradle` のビルド、`docker` のプル、`npm install` ——これらはすべてキャッシュを残していく。DevSweep は Mac 上の **31カテゴリ**をスキャンし、安全に削除できるものを洗い出して一掃する。当て推量は不要。
+開発ツールチェーンが放置したギガバイトを取り戻そう。`gradle` のビルド、`docker` のプル、`npm install` ——これらはすべてキャッシュを残していく。DevSweep は Mac 上の **44カテゴリ**をスキャンし、安全に削除できるものを洗い出して一掃する。当て推量は不要。
+
+キャッシュだけではない。散らばった**ビルド/依存フォルダ**（`node_modules`、`target` など）を見つけるプロジェクトスキャナと、露出した機密情報（`.env`、秘密鍵、クレデンシャル）を検査する**セキュリティモード**も搭載——すべて**ホームダッシュボード**から始まる。
 
 **CLI**（`devsweep`、単一の bash スクリプト）と**ネイティブ macOS アプリ**（`DevSweep.app`、SwiftUI）の両方を同梱。GUI は同じ検証済みエンジンの薄いラッパーに過ぎない。
 
@@ -25,29 +27,33 @@
 **CLI**
 - スキャン、ドライラン プレビュー、選択/全体クリーンアップ
 - GUI 向け `--json` / `detail` マシン出力
+- `scan-projects` / `scan-secrets` ——プロジェクトフォルダ・機密ファイルスキャナ
 - `--older-than=Nd` 日数フィルター・設定ファイルによる保護リスト
 
 **macOS アプリ**
-- **マスター–デテール UI** ——カテゴリ一覧 + カテゴリ別の詳細（パス、実行コマンド、再生成コスト、安全性、Full Disk Access のヒント）
-- **リスクティア バッジ** ——削除前に信号機方式で確認（安全 / 中程度 / 注意）
+- **ホームダッシュボード** ——回収可能領域を示すディスクゲージ、モード別サマリーカード（トップ3プレビュー）、ワンクリック一括スキャン
+- **キャッシュモード** ——マスター–デテール UI、リスクティア バッジ（安全 / 中程度 / 注意）、おすすめ選択、サイズ/名前ソート、リアルタイム進行ウインドウ
+- **プロジェクトスキャナ** ——散らばった `node_modules` / `target` / `.next` / `Pods` … をサイズ・未使用期間つきで発見、30日+ 未使用フィルター
+- **セキュリティ検査** ——露出した `.env`・秘密鍵・クレデンシャルを git 連動のリスクレベルで判定（コミット済み=重大、gitignore 未設定=高）。レポート専用: 内容は読まず、削除もしない。`.gitignore` 追加 / `chmod 600` のワンクリック修正——個別または一括
+- **ゴミ箱/完全削除の選択** ——デフォルトは復元可能なゴミ箱。「今回移動した項目だけ完全削除」もワンクリック
+- **メニューバー & バックグラウンドモード** ——回収容量つきステータスアイコン、Dock 非表示、ログイン時に起動
+- **署名付き自動アップデート** ——Ed25519 署名検証済みリリースのみ適用、1日1回自動チェック
 - **スケジュール自動クリーン** ——launchd による日次 / 週次 / 月次実行。Docker のようなステートフルなツールは自動実行から意図的に除外
-- **完了通知** ——スイープ終了時に解放容量を添えてシステム通知
-- **保護リスト** ——手動・スケジュール・`all` のいずれでも掃除されないキャッシュを固定
-- **日数フィルター** ——N 日より古いキャッシュのみ削除
-- **全選択トグル**と削除前の**カスタム確認モーダル**
+- **許可ダイアログなしのスキャン** ——macOS 保護フォルダ（デスクトップ・書類・ダウンロード）は既定で除外し確認ダイアログを回避。含めるトグル + 設定にフルディスクアクセス案内
+- **保護リスト · 日数フィルター · 完了通知 · カスタム確認モーダル**
 - **15言語対応** ——システムロケールから自動検出、設定で切り替え可能
 
 ---
 
-## カテゴリ（31）
+## カテゴリ（44）
 
-**Safe**（21 ——デフォルトのスイープ対象）:
+**Safe**（26 ——デフォルトのスイープ対象）:
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate` `electron` `ccache` `gem` `poetry` `carthage`
 
-**Heavy**（10 ——再ダウンロードコストが高く、明示指定または `all` でのみ削除）:
+**Heavy**（18 ——再ダウンロードコストが高く、明示指定または `all` でのみ削除）:
 
-`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex` `puppeteer` `cypress` `ollama` `lmstudio` `xcode-devsupport` `simruntime` `conda` `bazel`
 
 ---
 
@@ -66,6 +72,9 @@ devsweep --older-than=30d clean   # 30日より古いキャッシュのみ
 # マシン出力（GUI が使用）
 devsweep --json           # 全カテゴリを JSON 配列で出力
 devsweep detail <cat>     # 1カテゴリの詳細を JSON オブジェクトで出力
+devsweep scan-projects ~  # 散らばったビルド/依存フォルダを JSON で出力
+devsweep scan-secrets ~   # 露出した機密ファイルを JSON で出力（レポート専用・内容は読まない）
+                          # --include-protected でデスクトップ・書類・ダウンロードも対象に
 ```
 
 任意で `PATH` にシンボリックリンクを作成すると、どこからでも実行できる:

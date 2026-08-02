@@ -2,7 +2,9 @@
 
 **English** | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-Hans.md) | [繁體中文](README.zh-Hant.md)
 
-Reclaim the gigabytes your dev toolchain forgot about. Every `gradle` build, `docker` pull, and `npm install` leaves caches behind — DevSweep scans **31 categories** across your Mac, flags what's safe to delete, and sweeps them back. No guesswork.
+Reclaim the gigabytes your dev toolchain forgot about. Every `gradle` build, `docker` pull, and `npm install` leaves caches behind — DevSweep scans **44 categories** across your Mac, flags what's safe to delete, and sweeps them back. No guesswork.
+
+Beyond caches, it also hunts down **scattered build folders** (`node_modules`, `target`, …) and runs a **security check** for exposed secrets (`.env`, private keys, credentials) — all from a single **home dashboard**.
 
 Ships as both a **CLI** (`devsweep`, a single bash script) and a **native macOS app** (`DevSweep.app`, SwiftUI). The GUI is a thin shell over the same verified engine.
 
@@ -25,29 +27,33 @@ Ships as both a **CLI** (`devsweep`, a single bash script) and a **native macOS 
 **CLI**
 - Scan, dry-run preview, and selective/full cleanup
 - `--json` / `detail` machine output for the GUI
+- `scan-projects` / `scan-secrets` — project-folder & sensitive-file scanners
 - `--older-than=Nd` age filter · protect list via config file
 
 **macOS app**
-- **Master–detail UI** — category list + per-category breakdown (paths, exact command, regeneration cost, safety, Full Disk Access hints)
-- **Risk-tiered badges** — a traffic-light read (safe / mid / caution) before you commit
+- **Home dashboard** — disk gauge with the reclaimable slice highlighted, per-mode summary cards with top-3 previews, and a one-click scan-everything button
+- **Cache mode** — master–detail UI, risk-tiered badges (safe / mid / caution), recommended selection, size/name sort, and a live cleaning-progress window
+- **Project scanner** — finds scattered `node_modules` / `target` / `.next` / `Pods` … with size and last-used age, plus a 30d+ unused filter
+- **Security check** — flags exposed `.env` files, private keys and credentials with git-aware risk levels (committed = critical, not gitignored = high). Report-only: never reads contents, never deletes. One-click `.gitignore` / `chmod 600` fixes — single or batch
+- **Trash or permanent delete** — recoverable by default, with "empty just-trashed items" in one click
+- **Menu bar & background mode** — status item with reclaimable size, hide-Dock option, launch at login
+- **Signed auto-update** — Ed25519-verified releases, checked automatically once a day
 - **Scheduled auto-clean** — daily / weekly / monthly via launchd; stateful tools like Docker are excluded from the automatic pass on purpose
-- **Done notifications** — a system notification when a sweep finishes, with how much it freed
-- **Protect list** — pin caches that are never swept (manual, scheduled, or `all`)
-- **Age filter** — only clear caches older than N days
-- **Select-all toggle** and a **custom confirmation modal** before any deletion
+- **Prompt-free scanning** — TCC-protected folders (Desktop/Documents/Downloads) are skipped by default to avoid macOS permission dialogs; opt-in toggle + Full Disk Access onboarding in settings
+- **Protect list · age filter · done notifications · custom confirmation modal**
 - **15 languages** — auto-detected from your system locale, switchable in settings
 
 ---
 
-## Categories (31)
+## Categories (44)
 
-**Safe** (21 — included in the default sweep):
+**Safe** (26 — included in the default sweep):
 
-`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate`
+`gradle` `npm` `yarn` `pnpm` `bun` `pip` `uv` `cargo` `go` `cocoapods` `swiftpm` `composer` `nuget` `deno` `brew` `colima` `xcode` `vscode` `cursor` `zed` `codemate` `electron` `ccache` `gem` `poetry` `carthage`
 
-**Heavy** (10 — costly to re-download, cleared only when named or via `all`):
+**Heavy** (18 — costly to re-download, cleared only when named or via `all`):
 
-`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex`
+`docker` `maven` `pub` `playwright` `rustup-targets` `xcode-sim` `huggingface` `jetbrains` `androidstudio` `codex` `puppeteer` `cypress` `ollama` `lmstudio` `xcode-devsupport` `simruntime` `conda` `bazel`
 
 ---
 
@@ -66,6 +72,9 @@ devsweep --older-than=30d clean   # only caches older than 30 days
 # machine output (used by the GUI)
 devsweep --json           # all categories as a JSON array
 devsweep detail <cat>     # one category's detail as a JSON object
+devsweep scan-projects ~  # scattered build/dependency folders as JSON
+devsweep scan-secrets ~   # exposed sensitive files as JSON (report-only, never reads contents)
+                          # add --include-protected to also scan Desktop/Documents/Downloads
 ```
 
 Optional — symlink it onto your `PATH` to run anywhere:
