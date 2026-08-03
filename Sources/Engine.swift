@@ -32,6 +32,10 @@ final class Engine {
     var secretFindings: [SecretFinding] = []
     var secretScanRoot = ""
 
+    // ── git 히스토리 시크릿 검사(gitleaks 위임) 상태 ──
+    var isScanningGitSecrets = false
+    var gitLeakReport: GitLeakReport?
+
     /// 펼친 카테고리의 상세 정보 캐시 (lazy 로드). 정리/재스캔 후 무효화됨.
     var detailCache: [String: CategoryDetail] = [:]
     var loadingDetails: Set<String> = []
@@ -399,6 +403,22 @@ final class Engine {
         }
     }
 
+    /// git 히스토리에 묻힌 시크릿을 gitleaks 로 검사한다 (설치돼 있을 때만).
+    /// 🔴 DevSweep 은 시크릿 값을 보유하지 않는다 — CLI 가 Secret/Match 를 걷어내고,
+    ///    GitLeakFinding 에도 해당 필드가 없어 디코딩 단계에서 한 번 더 버려진다.
+    func scanGitSecrets(root: String) async {
+        guard !isScanningGitSecrets else { return }
+        isScanningGitSecrets = true; errorMessage = nil
+        defer { isScanningGitSecrets = false }
+        guard let path = enginePath else { errorMessage = tr("err.engineMissing", uiLang); return }
+        do {
+            let out = try await run([path, "scan-git-secrets", root])
+            gitLeakReport = try JSONDecoder().decode(GitLeakReport.self, from: Data(out.utf8))
+        } catch {
+            errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
+        }
+    }
+
     /// 보안 목록 정렬 — 위험도 내림차순, 동률은 경로순 (scanSecrets/조치 후 공통).
     private func resortSecretFindings() {
         secretFindings.sort { $0.risk.severity != $1.risk.severity
@@ -580,6 +600,29 @@ struct SecretFinding: Identifiable, Decodable, Equatable {
 
 /// 민감 파일 종류 — 아이콘/설명 분기용.
 enum SecretKind: String, Decodable { case env, key, cred, state }
+
+/// gitleaks 가 히스토리에서 찾은 항목 1건 — **메타데이터 전용**.
+/// 🔴 시크릿 원문(gitleaks 리포트의 Secret/Match)에 대응하는 프로퍼티를 의도적으로 두지 않는다.
+///    Decodable 은 정의되지 않은 키를 버리므로, 설령 상류가 흘려보내도 앱 메모리에 남지 않는다.
+struct GitLeakFinding: Identifiable, Decodable, Equatable {
+    let rule: String        // 규칙 ID (github-pat 등)
+    let desc: String
+    let repo: String
+    let file: String
+    let commit: String      // 축약 해시
+    let line: Int
+    let author: String
+    let date: String        // YYYY-MM-DD
+    let message: String     // 커밋 제목 한 줄
+    var id: String { "\(commit):\(file):\(rule):\(line)" }
+}
+
+/// git 히스토리 검사 결과. available=false 면 gitleaks 미설치(설치 안내 표시).
+struct GitLeakReport: Decodable, Equatable {
+    let available: Bool
+    let repos: Int
+    let findings: [GitLeakFinding]
+}
 
 /// 노출 위험도. severity 는 정렬 키(높을수록 위험).
 enum SecretRisk: String, Decodable {

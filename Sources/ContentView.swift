@@ -31,6 +31,7 @@ struct ContentView: View {
     @State private var projOldOnly = false               // 30일+ 미사용만 표시
     @State private var secScanRoot = ""                  // 보안 점검 스캔 위치(빈값=홈)
     @State private var secHideLow = false                // LOW(정보성) 항목 숨기기
+    @State private var showGitLeak = false               // git 히스토리 검사 모달
     /// TCC 보호 폴더(데스크탑·문서·다운로드) 스캔 포함 — 기본 꺼짐(macOS 권한 팝업 방지).
     /// 켜는 순간 다음 스캔에서 의도된 팝업이 1회 뜬다. 프로젝트/보안 스캐너 공용.
     @AppStorage("scanProtectedFolders") private var scanProtected = false
@@ -75,6 +76,7 @@ struct ContentView: View {
         .frame(width: 900, height: 650)
         .overlay { cleanConfirmOverlay }
         .overlay { cleanProgressOverlay }
+        .overlay { gitLeakOverlay }
         .animation(.snappy(duration: 0.22), value: cleanRequest)
         .animation(.snappy(duration: 0.25), value: engine.showCleanProgress)
         .animation(.snappy(duration: 0.2), value: engine.cleanItems)
@@ -768,6 +770,14 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(picked.isEmpty)
             }
+            // git 히스토리 검사 — 외부 도구(gitleaks)에 위임, 결과만 표시
+            Button { showGitLeak = true } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "clock.arrow.circlepath")
+                    Text(tr("git.button", lang))
+                }
+            }
+            .disabled(engine.isScanningGitSecrets)
             // 옵션 진입 — 모든 탭 공통: 하단 최우측
             Button { openWindow(id: "settings") } label: {
                 Image(systemName: "gearshape").font(.system(size: 13))
@@ -775,6 +785,151 @@ struct ContentView: View {
             .buttonStyle(.borderless).help(tr("footer.settings", lang))
         }
         .bottomBarStyle()
+    }
+
+    // ── git 히스토리 시크릿 검사 모달 ──
+
+    @ViewBuilder private var gitLeakOverlay: some View {
+        if showGitLeak {
+            ZStack {
+                Rectangle().fill(.black.opacity(0.32)).ignoresSafeArea()
+                    .onTapGesture { if !engine.isScanningGitSecrets { showGitLeak = false } }
+                gitLeakCard
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
+    }
+
+    private var gitLeakCard: some View {
+        VStack(spacing: 0) {
+            // 헤더
+            HStack(spacing: 9) {
+                Image(systemName: "clock.arrow.circlepath").font(.system(size: 15))
+                    .foregroundStyle(Theme.sweep)
+                Text(tr("git.title", lang)).font(.system(size: 14, weight: .semibold, design: .rounded))
+                Spacer()
+            }
+            .padding(.horizontal, 18).padding(.vertical, 13)
+            .background(.regularMaterial).overlay(alignment: .bottom) { Divider() }
+
+            Group {
+                if engine.isScanningGitSecrets {
+                    VStack(spacing: 10) {
+                        ProgressView().controlSize(.large)
+                        Text(tr("git.scanning", lang)).font(.callout).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity).padding(.vertical, 34)
+                } else if let rep = engine.gitLeakReport {
+                    if !rep.available { gitLeakMissing } else { gitLeakResults(rep) }
+                } else {
+                    gitLeakIntro
+                }
+            }
+            .padding(.horizontal, 18).padding(.vertical, 15)
+
+            // 액션
+            HStack(spacing: 9) {
+                Spacer()
+                Button(tr(engine.gitLeakReport == nil ? "confirm.cancel" : "progress.close", lang)) {
+                    showGitLeak = false
+                    engine.gitLeakReport = nil     // 다음 열람 시 다시 안내부터
+                }
+                .disabled(engine.isScanningGitSecrets)
+                if engine.gitLeakReport == nil {
+                    Button(tr("git.start", lang)) {
+                        Task { await engine.scanGitSecrets(root: secScanRoot.isEmpty ? "~" : secScanRoot) }
+                    }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .disabled(engine.isScanningGitSecrets)
+                }
+            }
+            .padding(.horizontal, 18).padding(.vertical, 12)
+            .background(.regularMaterial).overlay(alignment: .top) { Divider() }
+        }
+        .frame(width: 520)
+        .background(RoundedRectangle(cornerRadius: 14).fill(.background))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(radius: 22, y: 8)
+    }
+
+    private var gitLeakIntro: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(tr("git.intro", lang)).font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Label(tr("git.noSecretNote", lang), systemImage: "eye.slash")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Image(systemName: "folder").foregroundStyle(.tertiary)
+                Text(secScanRoot.isEmpty ? "~/" : projDisplay(secScanRoot))
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+            }
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var gitLeakMissing: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            Text(tr("git.missingBody", lang)).font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Text("brew install gitleaks")
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(.horizontal, 9).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                Button(tr("git.copy", lang)) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString("brew install gitleaks", forType: .string)
+                }
+                .controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func gitLeakResults(_ rep: GitLeakReport) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(tr("git.resultFmt", lang, rep.repos, rep.findings.count))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+            if rep.findings.isEmpty {
+                HStack(spacing: 7) {
+                    Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
+                    Text(tr("git.none", lang)).font(.callout).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 6)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(rep.findings) { f in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Circle().fill(Theme.danger).frame(width: 7, height: 7)
+                                    Text(f.rule).font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                                    Spacer(minLength: 4)
+                                    Text(f.date).font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Text("\(f.file) · \(f.commit) · \(f.author)")
+                                    .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                                    .lineLimit(1).truncationMode(.middle)
+                                Text(projDisplay(f.repo))
+                                    .font(.system(size: 9.5)).foregroundStyle(.tertiary)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 7)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.danger.opacity(0.06)))
+                        }
+                    }
+                }
+                .frame(maxHeight: 210)
+                Label(tr("git.warn", lang), systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(Theme.heavy)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// 민감 파일 1행 — 체크박스(수정 가능 행만) · 위험도 색 좌측바 · 종류 아이콘 · 파일명/경로 · 설명 · 조치 버튼.
