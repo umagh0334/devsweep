@@ -37,6 +37,7 @@
 - **缓存模式** — 主从视图界面、风险红绿灯徽章（安全 / 中等 / 谨慎）、推荐选择、按大小/名称排序、实时清理进度窗口
 - **项目扫描器** — 找出散落的 `node_modules` / `target` / `.next` / `Pods` … 并显示大小与闲置时长，支持 30 天+ 未用过滤
 - **安全检查** — 以 git 感知的风险等级标记暴露的敏感信息（已提交=严重，未加入 gitignore=高）：`.env`、SSH/TLS 私钥、kubeconfig、Docker/GitHub CLI/gcloud 凭证、数据库密码（`.pgpass`、`.my.cnf`）、Apple `AuthKey` 等。还会提醒过旧凭证（180 天+）和宽松的 `~/.ssh` 权限。仅报告：不读取内容、不删除。一键 `.gitignore` / `chmod` 修复——单个或批量
+- **git 历史扫描** — 通过委托 [gitleaks](https://github.com/gitleaks/gitleaks) 查找埋在提交历史中的密钥（可选，未安装也不影响使用）。只获取类型、文件、提交和日期，**密钥内容本身既不保存也不显示**
 - **废纸篓/彻底删除可选** — 默认移到可恢复的废纸篓，并可一键"仅清空本次移入项"
 - **菜单栏与后台模式** — 显示可回收空间的状态图标、隐藏 Dock 图标、登录时启动
 - **签名自动更新** — 仅安装通过 Ed25519 签名验证的版本，每天自动检查一次
@@ -77,6 +78,7 @@ devsweep detail <cat>     # 单个类别的详情输出为 JSON 对象
 devsweep scan-projects ~  # 散落的构建/依赖文件夹输出为 JSON
 devsweep scan-secrets ~   # 暴露的敏感文件输出为 JSON（仅报告，不读取内容）
                           # 加 --include-protected 可同时扫描桌面/文稿/下载
+devsweep scan-git-secrets ~   # 用 gitleaks 扫描 git 历史——仅元数据，不输出密钥内容
 ```
 
 可选——将其软链接到 `PATH` 以便在任意位置运行：
@@ -149,12 +151,12 @@ xattr -dr com.apple.quarantine /路径/DevSweep.app
 **已完成**
 - ✅ 保护列表 · 时间过滤（`--older-than`）· 定时自动清理（launchd）
 - ✅ 44 个缓存类别 · 项目文件夹扫描器 · 安全检查（单个/批量修复）
+- ✅ git 历史密钥扫描（集成 gitleaks）
 - ✅ 废纸篓模式 · 菜单栏与后台模式 · 个性化主页仪表盘
 - ✅ Ed25519 签名自动更新 · 15 种语言
 
 **计划中**
 - 清理历史——"何时 / 清了什么 / 释放多少"
-- 更深入的密钥扫描——shell 与 git 历史（考虑集成 gitleaks）
 - 用户自定义类别
 - 更精确的回收空间测量
 - Developer ID 签名与公证（告别 Gatekeeper 麻烦）
