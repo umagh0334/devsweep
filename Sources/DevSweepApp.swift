@@ -42,8 +42,11 @@ struct DevSweepApp: App {
                     // 콜드 런치 시 1회(.onChange 는 초기값엔 미발동) — 외관 적용 + 자동 정리 합산 + self-heal
                     AppRefs.engine = engine; AppRefs.appState = appState   // 메뉴바(AppKit) 브리지
                     applyAppearance()
-                    // 실시간 감시가 켜져 있으면 앱 시작 시 재개 (감시 루트는 이후 보안 스캔 때 갱신)
-                    if UserDefaults.standard.bool(forKey: "watchSecrets") { engine.startWatching(root: "~") }
+                    // 실시간 감시 재개 (감시 루트는 이후 보안 스캔 때 갱신).
+                    // 🔴 bool(forKey:) 는 키가 없으면 false 라 기본 켜짐과 어긋난다 — object 로 읽어 기본값 true 를 살린다.
+                    if UserDefaults.standard.object(forKey: "watchSecrets") as? Bool ?? true {
+                        engine.startWatching(root: "~")
+                    }
                     AutoClean.reconcile()
                     AutoClean.syncIfNeeded(enabled: autoClean, period: autoCleanPeriod, hour: autoCleanHour, minute: autoCleanMinute, weekday: autoCleanWeekday, day: autoCleanDay, olderThanDays: olderThanDays)
                 }
