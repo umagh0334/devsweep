@@ -61,6 +61,15 @@ final class Engine {
         return d > 0 ? ["--older-than=\(d)d"] : []
     }
 
+    /// 휴지통 모드 사용 여부 — 삭제를 실제로 수행하는 이 계층에서 단일 판정한다.
+    /// 🔴 나이 필터가 켜져 있으면 휴지통을 쓰지 않는다: 휴지통은 폴더를 통째로 옮기므로
+    ///    'N일보다 오래된 것만' 이라는 화면 약속을 지킬 수 없다. UI 도 선택을 막지만,
+    ///    저장된 deleteMode 값만 보고 잘못된 경로로 가지 않도록 엔진에서 한 번 더 강제한다.
+    private var useTrashMode: Bool {
+        UserDefaults.standard.integer(forKey: "deleteMode") == 0
+            && UserDefaults.standard.integer(forKey: "olderThanDays") == 0
+    }
+
     /// TCC 보호 폴더(데스크탑·문서·다운로드) 포함 인자 — 기본 제외(macOS 권한 팝업 방지), 토글 시 포함.
     private var protectedArgs: [String] {
         UserDefaults.standard.bool(forKey: "scanProtectedFolders") ? ["--include-protected"] : []
@@ -139,7 +148,7 @@ final class Engine {
         showCleanProgress = true
 
         // 삭제 방식 — 0=휴지통(기본·복구가능) 1=완전삭제. 확인창 세그먼트가 AppStorage 로 저장.
-        let useTrash = UserDefaults.standard.integer(forKey: "deleteMode") == 0
+        let useTrash = useTrashMode
 
         for i in cleanItems.indices {
             cleanItems[i].status = .cleaning
@@ -248,7 +257,7 @@ final class Engine {
         let sel = projectDirs.filter(\.selected)
         guard !sel.isEmpty, !isCleaning else { return }
         isCleaning = true; errorMessage = nil
-        let useTrash = UserDefaults.standard.integer(forKey: "deleteMode") == 0
+        let useTrash = useTrashMode
 
         cleanItems = sel.map { CleanItem(name: prettyPath($0.path), sizeKB: $0.sizeKB, id: $0.path) }
                         .sorted { $0.sizeKB > $1.sizeKB }
@@ -449,20 +458,46 @@ final class Engine {
 
     /// 감시 후보 경로들을 CLI 로 정밀 판정 → 위험하면 알림 + 보안 목록에 합류.
     /// 스캔 시점에 이미 있던 파일은 '새로 생긴 것'이 아니므로 건너뛴다(본인 편집 노이즈 차단).
+    /// 한 배치에서 정밀 판정할 최대 경로 수. clone·checkout·백업 복원처럼 파일이 한꺼번에 쏟아질 때
+    /// 경로마다 서브프로세스를 띄우면 수 분간 CPU를 태우므로 상한을 둔다. 초과분은 조용히 버리지 않고
+    /// '전체 스캔 권장' 알림으로 사용자에게 넘긴다 — 침묵하는 누락이 가장 나쁜 실패다.
+    private static let watchBatchCap = 300
+    /// 개별 알림 상한. 초과분은 요약 1건으로 묶어 알림센터 도배를 막는다.
+    private static let watchNotifyCap = 3
+
     private func handleWatchCandidates(_ paths: [String]) async {
         guard let enginePath else { return }
-        for p in paths {
+        let batch = paths.prefix(Self.watchBatchCap)
+        let truncated = paths.count > batch.count
+
+        var found: [SecretFinding] = []
+        for p in batch {
             if notifiedPaths.contains(p) { continue }
             if secretFindings.contains(where: { $0.path == p }) { continue }
             guard let out = try? await run([enginePath, "check-secret", p]),
                   let f = try? JSONDecoder().decode(SecretFinding.self, from: Data(out.utf8)),
                   f.risk != .low else { continue }
             notifiedPaths.insert(p)
-            secretFindings.append(f)
-            resortSecretFindings()
-            let dir = prettyPath((p as NSString).deletingLastPathComponent)
+            found.append(f)
+        }
+
+        if !found.isEmpty {
+            secretFindings.append(contentsOf: found)
+            resortSecretFindings()          // 건당이 아니라 배치당 1회
+            for f in found.prefix(Self.watchNotifyCap) {
+                let dir = prettyPath((f.path as NSString).deletingLastPathComponent)
+                Notifier.secretDetected(title: tr("watch.notifyTitle", uiLang),
+                                        body: "\(f.name) — \(watchReasonText(f))\n\(dir)")
+            }
+            let rest = found.count - min(found.count, Self.watchNotifyCap)
+            if rest > 0 {
+                Notifier.secretDetected(title: tr("watch.notifyTitle", uiLang),
+                                        body: tr("watch.notifyMoreFmt", uiLang, rest))
+            }
+        }
+        if truncated {
             Notifier.secretDetected(title: tr("watch.notifyTitle", uiLang),
-                                    body: "\(f.name) — \(watchReasonText(f))\n\(dir)")
+                                    body: tr("watch.notifyBulk", uiLang))
         }
     }
 
@@ -630,9 +665,22 @@ struct ProjectDir: Identifiable, Decodable, Equatable {
     let path: String
     let sizeKB: Int
     let ageDays: Int
-    var selected: Bool = true          // JSON 에 없음 → 기본 선택
+    /// git 이 추적 중인 내용을 담고 있음 — 재생성 가능한 캐시가 아니라 사용자 자산일 수 있다
+    /// (소스를 커밋해 두는 dist/·build/ 등). 이런 항목은 기본 선택에서 제외한다.
+    let tracked: Bool
+    var selected: Bool
     var id: String { path }
-    enum CodingKeys: String, CodingKey { case path; case sizeKB = "size_kb"; case ageDays = "age_days" }
+    enum CodingKeys: String, CodingKey {
+        case path; case sizeKB = "size_kb"; case ageDays = "age_days"; case tracked
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        sizeKB = try c.decode(Int.self, forKey: .sizeKB)
+        ageDays = try c.decode(Int.self, forKey: .ageDays)
+        tracked = (try? c.decode(Bool.self, forKey: .tracked)) ?? false
+        selected = !tracked
+    }
 }
 
 /// 보안 점검이 찾은 민감 파일 1개. CLI 는 파일명·git 상태·권한만 보고 판정한다(내용 안 읽음).
@@ -665,21 +713,21 @@ enum SecretKind: String, Decodable { case env, key, cred, state }
 ///    Decodable 은 정의되지 않은 키를 버리므로, 설령 상류가 흘려보내도 앱 메모리에 남지 않는다.
 struct GitLeakFinding: Identifiable, Decodable, Equatable {
     let rule: String        // 규칙 ID (github-pat 등)
-    let desc: String
     let repo: String
     let file: String
     let commit: String      // 축약 해시
     let line: Int
     let author: String
     let date: String        // YYYY-MM-DD
-    let message: String     // 커밋 제목 한 줄
     var id: String { "\(commit):\(file):\(rule):\(line)" }
 }
 
 /// git 히스토리 검사 결과. available=false 면 gitleaks 미설치(설치 안내 표시).
+/// errors>0 이면 일부 저장소 검사가 실패한 것 — '이상 없음'으로 표시하면 안 된다(거짓 안심 방지).
 struct GitLeakReport: Decodable, Equatable {
     let available: Bool
     let repos: Int
+    let errors: Int
     let findings: [GitLeakFinding]
 }
 

@@ -86,9 +86,11 @@ final class SecretWatcher {
         "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
         ".npmrc", ".pypirc", ".netrc", ".git-credentials", ".pgpass", ".my.cnf",
         "application_default_credentials.json",
+        ".envrc", ".terraformrc", "terraform.rc",
     ]
     private static let suffixes = [
         ".pem", ".key", ".p12", ".pfx", ".keystore", ".jks", ".tfstate", ".tfstate.backup",
+        ".env", ".tfvars", ".tfvars.json",      // prod.env 접미형 · terraform 변수
     ]
     /// `.env.example` 류는 위험이 아니므로 후보에서 제외 (CLI 와 동일 규칙)
     private static let envExcluded = [".example", ".sample", ".template", ".dist"]
@@ -106,6 +108,9 @@ final class SecretWatcher {
         if name.hasPrefix("service-account") || name.hasPrefix("serviceAccount") {
             return name.hasSuffix(".json")
         }
+        if name.contains("firebase-adminsdk") && name.hasSuffix(".json") { return true }
+        // *.env.example 류(템플릿)는 위험이 아니므로 suffix 매칭 전에 걸러낸다
+        if envExcluded.contains(where: { name.hasSuffix(".env" + $0) }) { return false }
         if let gates = gatedNames[name] { return gates.contains { path.contains($0) } }
         return suffixes.contains { name.hasSuffix($0) }
     }

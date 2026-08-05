@@ -20,7 +20,7 @@ Ships as both a **CLI** (`devsweep`, a single bash script) and a **native macOS 
 
 > The heavy lifting (measuring, deleting) is done by the OS and each tool; DevSweep only decides *where*, *safely*, and *clearly*. That's why a single bash script is enough for the engine.
 
-> 🛡 **Privacy** — This app never reads the contents of sensitive files and never sends any data anywhere, under any circumstances. All scans and checks happen entirely on this Mac. (The network is used only to check for and download updates from GitHub — and even that can be turned off in settings.)
+> 🛡 **Privacy** — DevSweep does not read the contents of your files; it looks only at names, locations, permissions and git status. Git history scanning runs only when you start it and is performed by the external tool [gitleaks](https://github.com/gitleaks/gitleaks) — DevSweep asks it for metadata only, so secret values are never handed back. The network is used solely to check for and download updates from GitHub (which you can turn off in settings); scan results and file information are never sent anywhere.
 
 ---
 

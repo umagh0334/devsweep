@@ -32,6 +32,9 @@ struct ContentView: View {
     @State private var secScanRoot = ""                  // 보안 점검 스캔 위치(빈값=홈)
     @State private var secHideLow = false                // LOW(정보성) 항목 숨기기
     @State private var showGitLeak = false               // git 히스토리 검사 모달
+    @AppStorage("watchSecrets") private var watchSecrets = true
+    /// 실시간 감시 안내를 이미 보여줬는지 — 최초 1회만 뜬다.
+    @AppStorage("watchConsentAsked") private var watchConsentAsked = false
     /// TCC 보호 폴더(데스크탑·문서·다운로드) 스캔 포함 — 기본 꺼짐(macOS 권한 팝업 방지).
     /// 켜는 순간 다음 스캔에서 의도된 팝업이 1회 뜬다. 프로젝트/보안 스캐너 공용.
     @AppStorage("scanProtectedFolders") private var scanProtected = false
@@ -77,6 +80,7 @@ struct ContentView: View {
         .overlay { cleanConfirmOverlay }
         .overlay { cleanProgressOverlay }
         .overlay { gitLeakOverlay }
+        .overlay { watchConsentOverlay }
         .animation(.snappy(duration: 0.22), value: cleanRequest)
         .animation(.snappy(duration: 0.25), value: engine.showCleanProgress)
         .animation(.snappy(duration: 0.2), value: engine.cleanItems)
@@ -116,6 +120,21 @@ struct ContentView: View {
     }
 
     private func rank(of name: String) -> Int? { ranked.firstIndex { $0.name == name } }
+
+    /// 나이 필터가 켜져 있으면 휴지통 모드를 막는다 — 휴지통은 폴더를 통째로 옮기는 방식이라
+    /// 'N일보다 오래된 것만' 이라는 화면 약속을 지킬 수 없기 때문(계약 불일치 방지).
+    private var ageBlocksTrash: Bool { olderThanDays > 0 }
+
+    /// 경로 대신 네이티브 명령으로 정리돼 휴지통을 지원하지 않는 카테고리들 —
+    /// CLI 의 do_<cat> 이 paths 를 내지 않는 항목과 일치해야 한다(변경 시 함께 갱신).
+    private static let noTrashCategories: Set<String> = ["docker", "rustup-targets", "xcode-sim", "simruntime"]
+
+    /// 이번 정리 대상 중 휴지통 미지원 카테고리 이름들(쉼표 연결). 없으면 nil.
+    private func noTrashNames(_ req: CleanRequest) -> String? {
+        let targets: [String] = req.targets ?? engine.categories.filter(\.selected).map(\.name)
+        let hits = targets.filter { Self.noTrashCategories.contains($0) }
+        return hits.isEmpty ? nil : hits.joined(separator: ", ")
+    }
 
     // ── 헤더: 로고 · 대형 회수량 · 분포 스택 바(시그니처) ──
     private var header: some View {
@@ -457,16 +476,35 @@ struct ContentView: View {
                 .padding(.horizontal, 22).padding(.top, 16)
             }
             // 삭제 방식 — 휴지통(복구가능, 기본) / 완전삭제(영구). 정리 전에 선택, 마지막 선택 기억.
+            // 🔴 나이 필터가 켜져 있으면 휴지통을 쓸 수 없다: 휴지통은 폴더를 통째로 옮기므로
+            //    'N일+ 만 지운다'는 화면 약속을 지킬 수 없다(예전엔 배지만 띄우고 전체를 옮겼다).
             Picker("", selection: $deleteMode) {
                 Label(tr("delete.trash", lang), systemImage: "trash").tag(0)
                 Label(tr("delete.permanent", lang), systemImage: "trash.slash").tag(1)
             }
             .pickerStyle(.segmented).labelsHidden()
+            .disabled(ageBlocksTrash)
             .padding(.horizontal, 22).padding(.top, 18)
-            Text(deleteMode == 0 ? tr("delete.trashDesc", lang) : tr("delete.permanentDesc", lang))
-                .font(.caption)
-                .foregroundStyle(deleteMode == 0 ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.danger))
-                .padding(.top, 5)
+            Group {
+                if ageBlocksTrash {
+                    Text(tr("delete.ageNeedsPermanentFmt", lang, olderThanDays))
+                        .foregroundStyle(Theme.heavy)
+                } else if deleteMode == 0, let noTrash = noTrashNames(req) {
+                    // 경로가 없어 네이티브 명령으로 정리되는 카테고리는 휴지통을 지원하지 않는다 →
+                    // '복구 가능' 문구가 이 항목에 한해 거짓이 되므로 명시적으로 알린다.
+                    VStack(spacing: 3) {
+                        Text(tr("delete.trashDesc", lang)).foregroundStyle(.secondary)
+                        Text(tr("delete.noTrashFmt", lang, noTrash)).foregroundStyle(Theme.danger)
+                    }
+                } else {
+                    Text(deleteMode == 0 ? tr("delete.trashDesc", lang) : tr("delete.permanentDesc", lang))
+                        .foregroundStyle(deleteMode == 0 ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.danger))
+                }
+            }
+            .font(.caption)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 22).padding(.top, 5)
 
             HStack(spacing: 10) {
                 Button { cleanRequest = nil } label: {
@@ -610,8 +648,17 @@ struct ContentView: View {
                                     Text(projDisplay(dir.path))
                                         .font(.system(size: 12, weight: .medium, design: .rounded))
                                         .lineLimit(1).truncationMode(.middle)
-                                    Text(tr("proj.agoFmt", lang, dir.ageDays))
-                                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                                    HStack(spacing: 5) {
+                                        Text(tr("proj.agoFmt", lang, dir.ageDays))
+                                            .font(.system(size: 10)).foregroundStyle(.tertiary)
+                                        // git 이 추적 중인 내용이 들어있으면 재생성 가능한 캐시가 아닐 수 있다
+                                        // (소스를 커밋해 두는 dist/·build/). 기본 미선택 + 경고 배지.
+                                        if dir.tracked {
+                                            Label(tr("proj.tracked", lang), systemImage: "exclamationmark.triangle.fill")
+                                                .font(.system(size: 9, weight: .medium))
+                                                .foregroundStyle(Theme.heavy)
+                                        }
+                                    }
                                 }
                                 Spacer(minLength: 8)
                                 Text(humanKB(dir.sizeKB))
@@ -721,7 +768,12 @@ struct ContentView: View {
                         Text(tr("sec.startHint", lang)).font(.callout).foregroundStyle(.secondary)
                     } else {
                         Image(systemName: "checkmark.shield.fill").font(.system(size: 34)).foregroundStyle(.green)
+                        // 🔴 '안전함'이 아니라 '스캔한 범위에서 발견 없음'이라고 말한다 —
+                        //    화이트리스트 스캐너의 빈 결과는 부재 증명이 아니므로 거짓 안심을 주면 안 된다.
                         Text(tr("sec.clean", lang)).font(.callout).foregroundStyle(.secondary)
+                        Text(tr("sec.cleanScope", lang))
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
                     }
                     Spacer()
                 }
@@ -792,6 +844,61 @@ struct ContentView: View {
             .buttonStyle(.borderless).help(tr("footer.settings", lang))
         }
         .bottomBarStyle()
+    }
+
+    // ── 실시간 감시 첫 실행 안내 ──
+    //   기본값은 켜짐이지만, 사용자가 모르는 채로 홈이 감시되는 상태를 만들지 않기 위해
+    //   최초 1회 무엇을 하는 기능인지 알리고 시작한다('몰래 켜져 있다'는 인상 차단).
+
+    @ViewBuilder private var watchConsentOverlay: some View {
+        if !watchConsentAsked {
+            ZStack {
+                Rectangle().fill(.black.opacity(0.34)).ignoresSafeArea()
+                VStack(spacing: 0) {
+                    VStack(spacing: 13) {
+                        Image(systemName: "lock.shield.fill")
+                            .font(.system(size: 34)).foregroundStyle(Theme.sweep)
+                            .padding(.top, 26)
+                        Text(tr("general.watch", lang))
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                        Text(tr("watch.consentBody", lang))
+                            .font(.callout).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label(tr("watch.consentPoint1", lang), systemImage: "eye.slash")
+                            Label(tr("watch.consentPoint2", lang), systemImage: "switch.2")
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 24)
+
+                    HStack(spacing: 10) {
+                        Button {
+                            watchSecrets = false; watchConsentAsked = true
+                            engine.stopWatching()
+                        } label: {
+                            Text(tr("watch.consentLater", lang)).frame(maxWidth: .infinity)
+                        }
+                        .controlSize(.large).buttonStyle(.bordered)
+                        Button {
+                            watchSecrets = true; watchConsentAsked = true
+                            engine.startWatching(root: engine.secretScanRoot)
+                        } label: {
+                            Text(tr("watch.consentEnable", lang)).frame(maxWidth: .infinity).fontWeight(.semibold)
+                        }
+                        .controlSize(.large).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    }
+                    .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 22)
+                }
+                .frame(width: 380)
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.regularMaterial))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+                .shadow(color: .black.opacity(0.28), radius: 28, y: 10)
+                .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
     }
 
     // ── git 히스토리 시크릿 검사 모달 ──
@@ -899,6 +1006,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(tr("git.resultFmt", lang, rep.repos, rep.findings.count))
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
+            // 검사 실패를 '발견 0건'과 섞지 않는다 — 실패를 깨끗함으로 읽으면 거짓 안심이 된다.
+            if rep.errors > 0 {
+                Label(tr("git.errorsFmt", lang, rep.errors), systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(Theme.heavy)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if rep.findings.isEmpty {
                 HStack(spacing: 7) {
                     Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)

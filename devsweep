@@ -101,9 +101,12 @@ wipe() {
   for p in "$@"; do
     [ -n "$p" ] && [ -e "$p" ] || continue
     if [ -n "${AGE_DAYS:-}" ]; then
-      # 나이 필터: mtime 기준 N일보다 오래된 파일만 삭제 후 빈 디렉터리 정리
+      # 나이 필터: mtime 기준 N일보다 오래된 파일만 삭제 후 빈 디렉터리 정리.
+      # 삭제 후 대상이 남아 있으면 실패로 간주 — 비0 반환 계약을 나이 필터 모드에서도 지킨다
+      # (예전에는 `|| true` 로 삼켜 권한 문제로 하나도 못 지워도 '완료'로 보고됐다).
       find "$p" -type f -mtime +"$AGE_DAYS" -delete 2>/dev/null || true
       find "$p" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+      if find "$p" -type f -mtime +"$AGE_DAYS" -print -quit 2>/dev/null | grep -q .; then rc=1; fi
     else
       rm -rf -- "$p" || true            # set -e 하에서도 중단 금지 — 실패 판정은 아래 잔존검사로 일원화
       if [ -e "$p" ]; then rc=1; fi      # rm 이 0을 내도 경로가 남으면 실패로 간주(권한 등)
@@ -158,7 +161,9 @@ do_playwright() { handle_paths "$1" "playwright" "재다운로드(무거움)" --
 # ── 추가 카테고리 (경로형) ──
 do_maven()     { handle_paths "$1" "maven" "재다운로드" -- "$HOME/.m2/repository"; }
 do_cocoapods() { handle_paths "$1" "cocoapods" "재다운로드" -- "$HOME/Library/Caches/CocoaPods"; }
-do_swiftpm()   { handle_paths "$1" "swiftpm" "재생성" -- "$HOME/Library/Caches/org.swift.swiftpm" "$HOME/Library/org.swift.swiftpm"; }
+# ~/Library/org.swift.swiftpm 은 캐시가 아니라 사용자 설정(레지스트리·미러·서명 신뢰)이라 제외.
+# 캐시 디렉터리만 정리한다 — 다른 카테고리와 동일하게 '설정은 건드리지 않음' 원칙 적용.
+do_swiftpm()   { handle_paths "$1" "swiftpm" "재생성" -- "$HOME/Library/Caches/org.swift.swiftpm"; }
 do_composer()  { handle_paths "$1" "composer" "재다운로드" -- "$HOME/Library/Caches/composer" "$HOME/.composer/cache"; }
 do_deno()      { handle_paths "$1" "deno" "재다운로드" -- "$HOME/Library/Caches/deno"; }
 do_pub()       { handle_paths "$1" "pub" "재다운로드" -- "$HOME/.pub-cache"; }
@@ -807,7 +812,7 @@ cmd_scan_projects() {
   local root="${1:-$HOME}"
   root="${root/#\~/$HOME}"
   [ -d "$root" ] || { printf '[]\n'; return 0; }
-  local now first=1 d kb mt days
+  local now first=1 d kb mt days tracked
   now=$(date +%s)
   printf '['
   while IFS= read -r d; do
@@ -816,8 +821,14 @@ cmd_scan_projects() {
     [ "$kb" -eq 0 ] && continue
     mt=$(stat -f %m "$d" 2>/dev/null || echo "$now")
     days=$(( (now - mt) / 86400 )); [ "$days" -lt 0 ] && days=0
+    # git 이 추적 중인 내용이 들어있으면 '재생성 가능한 캐시'가 아닐 수 있다(소스를 담은 dist/build 등).
+    # 호출부는 이 항목을 기본 선택에서 제외하고 경고를 표시한다.
+    tracked=false
+    if command -v git >/dev/null 2>&1 && [ -n "$(git -C "$d" ls-files -- . 2>/dev/null | head -1)" ]; then
+      tracked=true
+    fi
     [ "$first" -eq 1 ] && first=0 || printf ','
-    printf '{"path":"%s","size_kb":%s,"age_days":%s}' "$(json_escape "$d")" "$kb" "$days"
+    printf '{"path":"%s","size_kb":%s,"age_days":%s,"tracked":%s}' "$(json_escape "$d")" "$kb" "$days" "$tracked"
   done < <(set_prot_prune "$root"; find "$root" \
       \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \
          ${PROT_PRUNE[@]+"${PROT_PRUNE[@]}"} \) -prune -o \
@@ -834,7 +845,12 @@ secret_kind() {
   local b="$1" full="$2"
   case "$b" in
     .env.example|.env.sample|.env.template|.env.dist|.env.*.example|.env.*.sample) return 1 ;;
+    *.env.example|*.env.sample|*.env.template) return 1 ;;
     .env|.env.*)                          echo env ;;
+    .envrc)                               echo env ;;          # direnv — export 로 시크릿을 담는 관행
+    *.env)                                echo env ;;          # prod.env·local.env (docker-compose env_file 관행)
+    *.tfvars|*.tfvars.json)               echo cred ;;         # terraform 변수 — tfstate 보다 시크릿 빈도 높음
+    .terraformrc|terraform.rc)            echo cred ;;         # credentials 블록 포함
     id_rsa|id_dsa|id_ecdsa|id_ed25519)    echo key ;;
     *.pem|*.key|*.p12|*.pfx|*.keystore|*.jks) echo key ;;
     .npmrc|.pypirc|.netrc|.git-credentials)   echo cred ;;
@@ -842,6 +858,7 @@ secret_kind() {
     .pgpass|.my.cnf)                      echo cred ;;                     # DB 접속 비밀번호
     AuthKey_*.p8)                         echo key ;;                      # Apple 푸시/API 키
     service-account*.json|serviceAccount*.json) echo cred ;;               # GCP 서비스 계정
+    *firebase-adminsdk*.json)             echo cred ;;                     # Firebase 관리자 SDK 키
     application_default_credentials.json) echo cred ;;                     # gcloud ADC
     hosts.yml)   case "$full" in */.config/gh/hosts.yml)  echo cred ;; *) return 1 ;; esac ;;  # gh OAuth 토큰
     config.json) case "$full" in */.docker/config.json)   echo cred ;; *) return 1 ;; esac ;;  # 레지스트리 인증
@@ -923,7 +940,9 @@ cmd_scan_secrets() {
       \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/.git/*' \
          -o -path '*/node_modules/*' -o -path '*/vendor/*' -o -path '*/Pods/*' \
          ${PROT_PRUNE[@]+"${PROT_PRUNE[@]}"} \) -prune -o \
-      -type f \( -name '.env' -o -name '.env.*' \
+      -type f \( -name '.env' -o -name '.env.*' -o -name '.envrc' -o -name '*.env' \
+                 -o -name '*.tfvars' -o -name '*.tfvars.json' -o -name '.terraformrc' \
+                 -o -name '*firebase-adminsdk*.json' \
                  -o -name 'id_rsa' -o -name 'id_dsa' -o -name 'id_ecdsa' -o -name 'id_ed25519' \
                  -o -name '*.pem' -o -name '*.key' -o -name '*.p12' -o -name '*.pfx' \
                  -o -name '*.keystore' -o -name '*.jks' \
@@ -968,69 +987,57 @@ cmd_check_secret() {
     "$(json_escape "$f")" "$(json_escape "$base")" "$kind" "$risk" "$reason" "$gitst" "$perm" "$age"
 }
 
-# git 히스토리 시크릿 검사 — 외부 도구 gitleaks 에 위임하고 **메타데이터만** 재방출한다.
-#   🔴 gitleaks 리포트에는 시크릿 원문(Secret/Match)이 들어있다. 이 함수는 그 두 필드를 절대
-#      출력하지 않고(파이프로도 흘리지 않음), 임시 리포트는 파싱 직후 삭제한다 — DevSweep 은
-#      시크릿 값을 보유하지 않는다는 계약을 CLI 단계에서 지킨다.
-#   출력: {"available":bool,"repos":N,"findings":[{"rule","desc","file","commit","line","author","date","message"}]}
+# git 히스토리 시크릿 검사 — 외부 도구 gitleaks 에 위임하고 **메타데이터만** 받는다.
+#   🔴 핵심 설계: gitleaks 의 기본 리포트(json/csv)에는 시크릿 원문(Secret/Match)이 들어있다.
+#      그래서 리포트를 받아서 걸러내는 대신, **report-template 으로 필요한 필드만 출력하게 해서
+#      시크릿 값을 애초에 전달받지 않는다.** 출력은 stdout 스트림이라 평문이 디스크에 닿지도 않는다
+#      (예전 구현은 json 리포트를 임시파일로 쓰고 python3 로 파싱했다 — 비정상 종료 시 평문 잔존 위험).
+#   또한 python3 등 외부 런타임에 의존하지 않는다(미설치 환경에서 조용히 '0건'이 되던 문제 제거).
+#   출력: {"available":bool,"repos":N,"errors":N,"findings":[{"rule","repo","file","commit","line","author","date"}]}
+#     errors>0 이면 일부 저장소 검사가 실패한 것 — 호출부는 이를 '이상 없음'으로 표시하면 안 된다.
 #   usage: scan-git-secrets [root]
 cmd_scan_git_secrets() {
   local root="${1:-$HOME}"
   root="${root/#\~/$HOME}"
   if ! command -v gitleaks >/dev/null 2>&1; then
-    printf '{"available":false,"repos":0,"findings":[]}\n'; return 0
+    printf '{"available":false,"repos":0,"errors":0,"findings":[]}\n'; return 0
   fi
-  [ -d "$root" ] || { printf '{"available":true,"repos":0,"findings":[]}\n'; return 0; }
+  [ -d "$root" ] || { printf '{"available":true,"repos":0,"errors":0,"findings":[]}\n'; return 0; }
 
-  local tmp repos=0 first=1 gitdir repo
-  tmp=$(mktemp -t devsweep-gl) || { printf '{"available":true,"repos":0,"findings":[]}\n'; return 0; }
-  # 리포트에 시크릿 원문이 담기므로 어떤 경로로 빠져나가도 지워지도록 트랩을 건다
-  trap 'rm -f "$tmp"' RETURN
+  # 메타데이터만 뽑는 템플릿(시크릿 필드를 아예 참조하지 않음). 내용에 민감정보가 없으므로 평문 보관 무관.
+  local tmpl out
+  tmpl=$(mktemp -t devsweep-glt) || { printf '{"available":true,"repos":0,"errors":0,"findings":[]}\n'; return 0; }
+  out=$(mktemp -t devsweep-glo) || { rm -f "$tmpl"; printf '{"available":true,"repos":0,"errors":0,"findings":[]}\n'; return 0; }
+  trap 'rm -f "$tmpl" "$out"' RETURN
+  printf '{{range .}}{{.RuleID}}\t{{.Commit}}\t{{.StartLine}}\t{{.Date}}\t{{.Author}}\t{{.File}}\n{{end}}' > "$tmpl"
 
-  printf '{"available":true,'
-  local body="" part
+  local repos=0 errors=0 first=1 gitdir repo rc
+  local body="" rule commit line date author file
   while IFS= read -r gitdir; do
     [ -n "$gitdir" ] || continue
     repo=$(dirname "$gitdir")
     repos=$((repos + 1))
-    : > "$tmp"
-    gitleaks git "$repo" --report-format json --report-path "$tmp" --no-banner >/dev/null 2>&1 || true
-    [ -s "$tmp" ] || continue
-    # Secret/Match 는 읽지도 내보내지도 않는다 (아래 키만 선택 방출)
-    part=$(python3 - "$tmp" "$repo" <<'PY'
-import json, sys
-try:
-    rows = json.load(open(sys.argv[1]))
-except Exception:
-    sys.exit(0)
-repo = sys.argv[2]
-out = []
-for r in rows if isinstance(rows, list) else []:
-    out.append(json.dumps({
-        "rule":    r.get("RuleID", ""),
-        "desc":    r.get("Description", ""),
-        "repo":    repo,
-        "file":    r.get("File", ""),
-        "commit":  (r.get("Commit") or "")[:8],
-        "line":    r.get("StartLine", 0),
-        "author":  r.get("Author", ""),
-        "date":    (r.get("Date") or "")[:10],
-        "message": (r.get("Message") or "").split("\n")[0][:80],
-    }, ensure_ascii=False))
-print(",".join(out), end="")
-PY
-)
-    # repo 별 조각을 콤마로 이어붙인다 (빈 조각은 건너뜀 — 구분자 꼬임 방지)
-    if [ -n "$part" ]; then
-      if [ "$first" -eq 1 ]; then first=0; else body+=","; fi
-      body+="$part"
-    fi
+    # 이 출력 파일에는 메타데이터만 담긴다(템플릿이 시크릿 필드를 참조하지 않음) — 디스크 평문 위험 없음.
+    # exit 0=발견없음 1=발견있음 그 외=오류. 오류를 '깨끗함'으로 오인하지 않도록 분리 집계한다.
+    : > "$out"
+    rc=0
+    gitleaks git "$repo" --report-format template --report-template "$tmpl" \
+             --report-path "$out" --no-banner >/dev/null 2>&1 || rc=$?
+    [ "$rc" -le 1 ] || { errors=$((errors + 1)); continue; }
+    # 마지막 필드(file)가 남은 전부를 흡수하므로 경로에 탭이 있어도 앞 필드가 밀리지 않는다
+    while IFS=$'\t' read -r rule commit line date author file; do
+      [ -n "$rule" ] || continue
+      [ "$first" -eq 1 ] && first=0 || body+=","
+      body+=$(printf '{"rule":"%s","repo":"%s","file":"%s","commit":"%s","line":%s,"author":"%s","date":"%s"}' \
+        "$(json_escape "$rule")" "$(json_escape "$repo")" "$(json_escape "$file")" \
+        "$(json_escape "${commit:0:8}")" "${line:-0}" "$(json_escape "$author")" "$(json_escape "${date:0:10}")")
+    done < "$out"
   done < <(find "$root" \
       \( -path '*/Library/*' -o -path '*/.Trash/*' -o -path '*/node_modules/*' \
          -o -path "$HOME/Music" -o -path "$HOME/Pictures" -o -path "$HOME/Movies" \) -prune -o \
       -type d -name .git -print 2>/dev/null)
-  rm -f "$tmp"
-  printf '"repos":%s,"findings":[%s]}\n' "$repos" "$body"
+  rm -f "$tmpl" "$out"
+  printf '{"available":true,"repos":%s,"errors":%s,"findings":[%s]}\n' "$repos" "$errors" "$body"
 }
 
 # ── 엔트리포인트 ─────────────────────────────────────────────

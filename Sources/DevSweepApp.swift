@@ -44,7 +44,10 @@ struct DevSweepApp: App {
                     applyAppearance()
                     // 실시간 감시 재개 (감시 루트는 이후 보안 스캔 때 갱신).
                     // 🔴 bool(forKey:) 는 키가 없으면 false 라 기본 켜짐과 어긋난다 — object 로 읽어 기본값 true 를 살린다.
-                    if UserDefaults.standard.object(forKey: "watchSecrets") as? Bool ?? true {
+                    // 🔴 첫 실행 안내(watchConsentAsked)를 아직 안 본 사용자는 감시를 시작하지 않는다 —
+                    //    모르는 채로 홈이 감시되는 상태를 만들지 않기 위함. 안내에서 '켜기'를 누르면 그때 시작.
+                    let watchOn = UserDefaults.standard.object(forKey: "watchSecrets") as? Bool ?? true
+                    if watchOn, UserDefaults.standard.bool(forKey: "watchConsentAsked") {
                         engine.startWatching(root: "~")
                     }
                     AutoClean.reconcile()
