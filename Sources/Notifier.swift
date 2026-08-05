@@ -31,6 +31,11 @@ enum Notifier {
     }
 
     /// 새 버전 발견 알림 (자동 체크에서 호출).
+    /// 실시간 감시 — 위험한 민감 파일이 새로 생겼을 때. 문구는 호출부(Engine)가 현지화해 넘긴다.
+    static func secretDetected(title: String, body: String) {
+        post(title: title, body: body)
+    }
+
     static func updateAvailable(tag: String) {
         let lang = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .systemDefault
         post(title: tr("notify.updateTitle", lang), body: tr("notify.updateBodyFmt", lang, tag))

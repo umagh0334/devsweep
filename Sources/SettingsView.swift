@@ -112,6 +112,7 @@ struct GeneralSettings: View {
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("autoUpdateCheck") private var autoUpdateCheck = true
     @AppStorage("displayName") private var displayName = ""   // 홈 인사말 이름(빈값=시스템 이름)
+    @AppStorage("watchSecrets") private var watchSecrets = false   // 민감 파일 실시간 감시
     @State private var fdaGranted = false   // 전체 디스크 접근 상태 (시스템 설정에서만 변경 가능)
 
     var body: some View {
@@ -156,6 +157,15 @@ struct GeneralSettings: View {
                 Toggle(isOn: $notifyOnClean) {
                     Text(tr("general.notify", lang))
                     Text(tr("general.notifyDesc", lang))
+                }
+                // 실시간 감시 — 백그라운드에서 도는 기능이라 기본 꺼짐(사용자가 의식적으로 켠다)
+                Toggle(isOn: $watchSecrets) {
+                    Text(tr("general.watch", lang))
+                    Text(tr("general.watchDesc", lang))
+                }
+                .onChange(of: watchSecrets) { _, on in
+                    if on { engine.startWatching(root: engine.secretScanRoot) }
+                    else { engine.stopWatching() }
                 }
             }
             Section(tr("general.menuBarSection", lang)) {

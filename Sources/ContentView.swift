@@ -680,6 +680,13 @@ struct ContentView: View {
                     .font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.middle)
                 Button(tr("proj.pickFolder", lang)) { pickSecFolder() }.controlSize(.small)
+                if engine.isWatching {
+                    HStack(spacing: 4) {
+                        Circle().fill(.green).frame(width: 6, height: 6)
+                        Text(tr("watch.active", lang)).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    }
+                    .help(tr("general.watchDesc", lang))
+                }
                 Spacer()
                 Toggle(isOn: $scanProtected) { Text(tr("scan.includeProtected", lang)).font(.caption) }
                     .toggleStyle(.checkbox)

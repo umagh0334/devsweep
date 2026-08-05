@@ -38,6 +38,7 @@ Ships as both a **CLI** (`devsweep`, a single bash script) and a **native macOS 
 - **Project scanner** — finds scattered `node_modules` / `target` / `.next` / `Pods` … with size and last-used age, plus a 30d+ unused filter
 - **Security check** — flags exposed secrets with git-aware risk levels (committed = critical, not gitignored = high): `.env` files, SSH/TLS private keys, kubeconfig, Docker / GitHub CLI / gcloud credentials, DB passwords (`.pgpass`, `.my.cnf`), Apple `AuthKey` keys and more. Also warns on stale credentials (180 d+) and loose `~/.ssh` permissions. Report-only: never reads contents, never deletes. One-click `.gitignore` / `chmod` fixes — single or batch
 - **Git history scan** — finds secrets buried in commit history by delegating to [gitleaks](https://github.com/gitleaks/gitleaks) (optional; the app works fine without it). Only the finding's type, file, commit and date are taken in — the secret value itself is never held or shown
+- **Real-time watch** (opt-in) — notices when a new `.env` or key file appears in a risky state (not gitignored, loose permissions) and alerts you *before* it gets committed. Watches paths via FSEvents — file contents are never read
 - **Trash or permanent delete** — recoverable by default, with "empty just-trashed items" in one click
 - **Menu bar & background mode** — status item with reclaimable size, hide-Dock option, launch at login
 - **Signed auto-update** — Ed25519-verified releases, checked automatically once a day
@@ -79,6 +80,7 @@ devsweep scan-projects ~  # scattered build/dependency folders as JSON
 devsweep scan-secrets ~   # exposed sensitive files as JSON (report-only, never reads contents)
                           # add --include-protected to also scan Desktop/Documents/Downloads
 devsweep scan-git-secrets ~   # secrets in git history via gitleaks — metadata only, never the secret value
+devsweep check-secret <path>  # verdict for a single file (used by the real-time watch)
 ```
 
 Optional — symlink it onto your `PATH` to run anywhere:
@@ -152,6 +154,7 @@ For open-on-double-click distribution to everyone, the app would need an Apple D
 - ✅ Protect list · age filter (`--older-than`) · scheduled auto-clean (launchd)
 - ✅ 44 cache categories · project folder scanner · security check with single & batch fixes
 - ✅ Git history secret scanning (gitleaks integration)
+- ✅ Real-time watch for newly exposed sensitive files (FSEvents)
 - ✅ Trash mode · menu bar & background mode · personalized home dashboard
 - ✅ Ed25519-signed auto-update · 15 languages
 

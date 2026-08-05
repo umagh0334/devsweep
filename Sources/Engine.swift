@@ -36,6 +36,13 @@ final class Engine {
     var isScanningGitSecrets = false
     var gitLeakReport: GitLeakReport?
 
+    // ── 민감 파일 실시간 감시 (FSEvents — 경로만 관찰, 내용 미열람) ──
+    private let watcher = SecretWatcher()
+    var isWatching = false
+    var watchRoot = ""
+    /// 세션 내 중복 알림 방지 — 같은 경로는 한 번만 알린다.
+    private var notifiedPaths = Set<String>()
+
     /// 펼친 카테고리의 상세 정보 캐시 (lazy 로드). 정리/재스캔 후 무효화됨.
     var detailCache: [String: CategoryDetail] = [:]
     var loadingDetails: Set<String> = []
@@ -312,6 +319,8 @@ final class Engine {
             secretFindings = try JSONDecoder().decode([SecretFinding].self, from: Data(out.utf8))
             resortSecretFindings()
             secretScanRoot = root
+            // 감시 중이면 방금 스캔한 범위로 감시 대상을 옮긴다(스캔 결과 = 기준선 역할)
+            if isWatching { startWatching(root: root) }
         } catch {
             errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
         }
@@ -416,6 +425,56 @@ final class Engine {
             gitLeakReport = try JSONDecoder().decode(GitLeakReport.self, from: Data(out.utf8))
         } catch {
             errorMessage = tr("err.scanFmt", uiLang, error.localizedDescription)
+        }
+    }
+
+    // ── 실시간 감시 ──
+
+    /// root 아래에 새로 생기는 민감 파일을 감시한다. 감지는 경로 기반이며 내용은 읽지 않는다.
+    func startWatching(root: String) {
+        let r = root.isEmpty ? "~" : root
+        watcher.onCandidates = { [weak self] paths in
+            Task { @MainActor in await self?.handleWatchCandidates(paths) }
+        }
+        watcher.start(root: r)
+        isWatching = watcher.isRunning
+        watchRoot = isWatching ? r : ""
+    }
+
+    func stopWatching() {
+        watcher.stop()
+        isWatching = false
+        watchRoot = ""
+    }
+
+    /// 감시 후보 경로들을 CLI 로 정밀 판정 → 위험하면 알림 + 보안 목록에 합류.
+    /// 스캔 시점에 이미 있던 파일은 '새로 생긴 것'이 아니므로 건너뛴다(본인 편집 노이즈 차단).
+    private func handleWatchCandidates(_ paths: [String]) async {
+        guard let enginePath else { return }
+        for p in paths {
+            if notifiedPaths.contains(p) { continue }
+            if secretFindings.contains(where: { $0.path == p }) { continue }
+            guard let out = try? await run([enginePath, "check-secret", p]),
+                  let f = try? JSONDecoder().decode(SecretFinding.self, from: Data(out.utf8)),
+                  f.risk != .low else { continue }
+            notifiedPaths.insert(p)
+            secretFindings.append(f)
+            resortSecretFindings()
+            let dir = prettyPath((p as NSString).deletingLastPathComponent)
+            Notifier.secretDetected(title: tr("watch.notifyTitle", uiLang),
+                                    body: "\(f.name) — \(watchReasonText(f))\n\(dir)")
+        }
+    }
+
+    /// 알림 본문용 짧은 사유 — 화면 표기와 같은 키를 재사용한다.
+    private func watchReasonText(_ f: SecretFinding) -> String {
+        switch f.reason {
+        case "tracked":   return tr("sec.reason.tracked", uiLang)
+        case "untracked": return tr("sec.reason.untracked", uiLang)
+        case "perm":      return tr("sec.reason.perm", uiLang, f.perm)
+        case "permdir":   return tr("sec.reason.permDir", uiLang, f.perm)
+        case "stale":     return tr("sec.reason.stale", uiLang, f.ageDays)
+        default:          return tr("sec.reason.info", uiLang)
         }
     }
 
